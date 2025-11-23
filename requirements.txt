@@ -1,0 +1,36 @@
+# FastAPI and Server
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# Telegram Bot
+python-telegram-bot==20.7
+
+# LangChain and Agent Framework
+langchain==0.1.0
+langgraph==0.0.20
+
+# Database
+sqlalchemy==2.0.23
+
+# Environment and Configuration
+python-dotenv==1.0.0
+
+# Data Validation
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Google Calendar API
+google-api-python-client==2.108.0
+google-auth-httplib2==0.1.1
+google-auth-oauthlib==1.1.0
+
+# File Operations
+aiofiles==23.2.1
+
+# HTTP Client
+httpx==0.25.2
+
+# Date/Time Utilities
+python-dateutil==2.8.2
+
