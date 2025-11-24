@@ -1,84 +1,245 @@
-# Autonomous Airbnb Property Operations Manager
+# How to Run the System
 
-A multi-agent system that autonomously manages digital operations for up to 3 Airbnb-style properties. The system handles guest interactions, bookings, payments, cleaning coordination, issue resolution, and calendar management.
+Simple step-by-step guide to get the system running.
 
-## 🚀 Quick Start
+---
 
-### Prerequisites
+## Prerequisites
 
 - Python 3.9 or higher
-- Docker (for n8n, if using Docker)
-- Telegram account (for bot creation)
-- Google account (for Calendar API)
+- VPN connection (must be ON)
+- ngrok installed (or we'll install it)
+- Virtual environment set up
+- Dependencies installed
 
-### Installation
+---
 
-1. **Clone the repository** (if applicable) or navigate to project directory
+## Step 1: Turn On VPN
 
-2. **Create virtual environment:**
-   ```bash
-   python -m venv venv
-   ```
+**IMPORTANT:** Make sure your VPN is connected and running before starting anything else.
 
-3. **Activate virtual environment:**
-   - Windows: `venv\Scripts\activate`
-   - Linux/Mac: `source venv/bin/activate`
+✅ Check that VPN is active before proceeding.
 
-4. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+---
 
-5. **Set up environment variables:**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your actual values
-   ```
+## Step 2: Install ngrok (If Not Installed)
 
-6. **Run the application:**
-   ```bash
-   uvicorn api.main:app --reload
-   ```
+### Option A: Download ngrok
 
-## 📁 Project Structure
+1. Go to: https://ngrok.com/download
+2. Download ngrok for Windows
+3. Extract the zip file
+4. Note the path where you extracted it (e.g., `C:\Users\YourName\Downloads\ngrok-v3-stable-windows-amd64\`)
 
-```
-Project/
-├── agents/              # Agent implementations
-├── api/                  # FastAPI application
-│   ├── routes/          # API routes
-│   ├── models/          # Pydantic models
-│   ├── utils/           # Utility functions
-│   └── telegram/        # Telegram bot handlers
-├── database/            # Database models and setup
-├── config/              # Configuration management
-├── storage/             # File storage
-│   ├── photos/          # Property photos
-│   └── payment_screenshots/  # Payment screenshots
-├── n8n_workflows/       # n8n workflow exports
-├── tests/               # Test scripts
-└── docs/                # Documentation
+### Option B: Use Package Manager
+
+```bash
+# Using Chocolatey (if installed)
+choco install ngrok
+
+# Using Scoop (if installed)
+scoop install ngrok
 ```
 
-## 🤖 Agents
+### Set Up ngrok Authtoken
 
-1. **Inquiry & Booking Agent** - Handles guest inquiries and booking process
-2. **Issue Handling Agent** - Manages guest issues during stays
-3. **Cleaner Coordination Agent** - Schedules and coordinates cleaning tasks
-4. **Host Summary Agent** - Generates weekly and monthly reports
+1. Sign up at https://dashboard.ngrok.com/signup (free)
+2. Get your authtoken from the dashboard
+3. Run:
+   ```bash
+   ngrok config add-authtoken YOUR_AUTHTOKEN
+   ```
 
-## 📚 Documentation
+---
 
-- [Project Description](docs/project%20Description.md)
-- [Implementation Plan](docs/plan.md)
-- [Implementation Status](docs/implementation-status.md)
-- [Project Summary](docs/project-summary.md)
+## Step 3: Start ngrok
 
-## 🔧 Configuration
+### Option A: Using the Batch File
 
-See [Implementation Plan](docs/plan.md) for detailed setup instructions.
+Double-click `start_ngrok.bat`
 
-## 📝 License
+**OR** if the path in the file is wrong, edit `start_ngrok.bat` and update the ngrok path, then run it.
 
-This project is for educational purposes.
+### Option B: Manual Command
 
+Open a terminal and run:
+
+```bash
+ngrok http 8000
+```
+
+**Keep this terminal open!** You'll see a URL like `https://xxxx-xxxx.ngrok-free.app` - this is your public URL.
+
+---
+
+## Step 4: Start FastAPI Server
+
+Open a **new terminal** (keep ngrok running in the first one).
+
+### Activate Virtual Environment
+
+```bash
+# Windows
+venv\Scripts\activate
+
+# Linux/Mac
+source venv/bin/activate
+```
+
+### Start FastAPI
+
+```bash
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+**Keep this terminal open!** You should see:
+
+```
+INFO:     Uvicorn running on http://0.0.0.0:8000
+```
+
+---
+
+## Step 5: Start Proxy Server
+
+Open a **new terminal** (keep ngrok and FastAPI running).
+
+### Activate Virtual Environment (if not already activated)
+
+```bash
+venv\Scripts\activate
+```
+
+### Start Proxy Server
+
+```bash
+python proxy_server.py
+```
+
+**OR** double-click `start_proxy.bat`
+
+**Keep this terminal open!** You should see:
+
+```
+✅ Proxy server started on 127.0.0.1:1080
+```
+
+---
+
+## Step 6: Set Up Telegram Webhooks
+
+### Get Your ngrok URL
+
+From the ngrok terminal, copy the HTTPS URL (e.g., `https://xxxx-xxxx.ngrok-free.app`)
+
+### Set Guest Bot Webhook
+
+```bash
+curl "https://api.telegram.org/bot<YOUR_GUEST_BOT_TOKEN>/setWebhook?url=https://xxxx-xxxx.ngrok-free.app/api/webhook/guest"
+```
+
+### Set Host Bot Webhook
+
+```bash
+curl "https://api.telegram.org/bot<YOUR_HOST_BOT_TOKEN>/setWebhook?url=https://xxxx-xxxx.ngrok-free.app/api/webhook/host"
+```
+
+Replace:
+
+- `<YOUR_GUEST_BOT_TOKEN>` with your actual guest bot token
+- `<YOUR_HOST_BOT_TOKEN>` with your actual host bot token
+- `https://xxxx-xxxx.ngrok-free.app` with your actual ngrok URL
+
+---
+
+## Summary: What Should Be Running
+
+You should have **3 terminals/windows open**:
+
+1. **Terminal 1:** ngrok (showing the public URL)
+2. **Terminal 2:** FastAPI server (running on port 8000)
+3. **Terminal 3:** Proxy server (running on port 1080)
+
+**Plus:** VPN must be connected.
+
+---
+
+## Quick Start Commands (All in Order)
+
+```bash
+# 1. Activate virtual environment
+venv\Scripts\activate
+
+# 2. Terminal 1: Start ngrok
+ngrok http 8000
+
+# 3. Terminal 2: Start FastAPI
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+
+# 4. Terminal 3: Start proxy
+python proxy_server.py
+```
+
+---
+
+## Troubleshooting
+
+### ngrok not found
+
+- Make sure ngrok is installed
+- Check the path in `start_ngrok.bat` is correct
+- Or add ngrok to your system PATH
+
+### Port 8000 already in use
+
+- Stop any other service using port 8000
+- Or change the port in FastAPI command: `--port 8001` (and update ngrok accordingly)
+
+### VPN not working
+
+- Make sure VPN is connected
+- Check VPN connection status
+- Restart VPN if needed
+
+### Webhook not receiving messages
+
+- Check ngrok URL is correct
+- Verify webhook is set: `https://api.telegram.org/bot<TOKEN>/getWebhookInfo`
+- Make sure FastAPI is running
+- Check ngrok is still active (free tier has time limits)
+
+### Proxy server errors
+
+- Make sure VPN is connected
+- Check port 1080 is not in use
+- Verify Python dependencies are installed: `pip install pysocks`
+
+---
+
+## Stopping the System
+
+1. Press `Ctrl+C` in each terminal to stop:
+
+   - Stop proxy server first
+   - Stop FastAPI second
+   - Stop ngrok last
+
+2. Disconnect VPN (optional)
+
+---
+
+## Environment Variables
+
+Make sure you have a `.env` file with:
+
+- `GUEST_BOT_TOKEN` - Your Telegram guest bot token
+- `HOST_BOT_TOKEN` - Your Telegram host bot token
+- `HOST_TELEGRAM_ID` - Your Telegram user ID
+- `DASHSCOPE_API_KEY` - Your Qwen API key
+- `DATABASE_PATH` - Path to database file
+
+See `.env.example` for template.
+
+---
+
+That's it! The system should now be running.
