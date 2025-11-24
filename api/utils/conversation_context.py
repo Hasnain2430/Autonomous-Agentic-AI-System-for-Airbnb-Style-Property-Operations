@@ -31,6 +31,9 @@ def get_conversation_context(
         "booking_status": None,
         "last_interaction": None,
         "guest_preferences": {},
+        "active_agent": None,  # "inquiry" or "booking"
+        "booking_intent": False,  # True if user wants to book
+        "transition_history": [],  # List of agent transitions
     }
     
     query = (
@@ -70,6 +73,14 @@ def get_conversation_context(
         # Persist booking status
         if log.event_type == EventType.BOOKING_CONFIRMED:
             context["booking_status"] = "confirmed"
+        
+        # Persist active agent
+        if metadata.get("active_agent") and context["active_agent"] is None:
+            context["active_agent"] = metadata.get("active_agent")
+        
+        # Persist booking intent
+        if metadata.get("booking_intent") is not None:
+            context["booking_intent"] = metadata.get("booking_intent")
         
         # Persist dates from explicit metadata first
         if not context["dates"] and metadata.get("dates"):
@@ -114,10 +125,36 @@ def save_conversation_context(
         property_id: Property ID
         context_updates: Dictionary with context to save
     """
-    # Context is stored in SystemLog metadata, so we just need to ensure
-    # important context is saved when logging events
-    # This function can be called to explicitly save context
-    pass
+    # Save context by logging an AGENT_DECISION event with the context updates
+    from api.utils.logging import log_event, EventType
+    
+    # Track agent transitions
+    if "active_agent" in context_updates:
+        current_context = get_conversation_context(db, guest_telegram_id, property_id)
+        old_agent = current_context.get("active_agent")
+        new_agent = context_updates["active_agent"]
+        if old_agent and old_agent != new_agent:
+            # Agent transition occurred
+            transition_history = current_context.get("transition_history", [])
+            transition_history.append({
+                "from": old_agent,
+                "to": new_agent,
+                "timestamp": datetime.now().isoformat()
+            })
+            context_updates["transition_history"] = transition_history
+    
+    log_event(
+        db=db,
+        event_type=EventType.AGENT_DECISION,
+        message="Context update",
+        property_id=property_id,
+        metadata={
+            "guest_telegram_id": guest_telegram_id,
+            "user_id": guest_telegram_id,
+            "property_id": property_id,
+            **context_updates
+        }
+    )
 
 
 def get_context_summary_for_llm(
@@ -148,6 +185,12 @@ def get_context_summary_for_llm(
     
     if context.get("booking_status"):
         summary_parts.append(f"Booking status: {context['booking_status']}")
+    
+    if context.get("active_agent"):
+        summary_parts.append(f"Active agent: {context['active_agent']}")
+    
+    if context.get("booking_intent"):
+        summary_parts.append("Guest has expressed booking intent")
     
     if context.get("last_interaction"):
         last_date = datetime.fromisoformat(context["last_interaction"])

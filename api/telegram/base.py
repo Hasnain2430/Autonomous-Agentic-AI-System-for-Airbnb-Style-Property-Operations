@@ -89,8 +89,9 @@ async def send_message(
     message: str,
     parse_mode: Optional[str] = None,
     timeout: int = 10,
-    retries: int = 2
-) -> bool:
+    retries: int = 2,
+    return_message_id: bool = False
+) -> Optional[int]:
     """
     Send a message via Telegram bot with retry logic and proxy support.
     
@@ -103,7 +104,7 @@ async def send_message(
         retries: Number of retry attempts (default: 2)
     
     Returns:
-        True if message sent successfully, False otherwise
+        Message ID if sent successfully, None otherwise
     """
     import asyncio
     
@@ -118,7 +119,7 @@ async def send_message(
             else:
                 bot = Bot(token=bot_token)
             
-            await bot.send_message(
+            sent_message = await bot.send_message(
                 chat_id=chat_id,
                 text=message,
                 parse_mode=parse_mode,
@@ -126,19 +127,22 @@ async def send_message(
                 write_timeout=timeout,
                 connect_timeout=timeout
             )
-            return True
+            if return_message_id:
+                return sent_message.message_id if sent_message else None
+            # For backward compatibility, return message_id (truthy) or None (falsy)
+            return sent_message.message_id if sent_message else None
         except TelegramError as e:
             error_text = str(e)
             if "Chat not found" in error_text:
                 print("Telegram error: Chat not found. Ask the recipient to open the bot in Telegram and send /start once.")
-                return False
+                return None
             if attempt < retries:
                 wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s
                 print(f"Telegram error (attempt {attempt + 1}/{retries + 1}): {error_text}. Retrying in {wait_time}s...")
                 await asyncio.sleep(wait_time)
                 continue
             print(f"Error sending Telegram message after {retries + 1} attempts: {error_text}")
-            return False
+            return None
         except Exception as e:
             error_type = type(e).__name__
             if "Connect" in error_type or "Timeout" in error_type:
@@ -151,9 +155,9 @@ async def send_message(
                 print("⚠️  This might be due to VPN/firewall blocking Telegram API. Check your network settings.")
             else:
                 print(f"Unexpected error sending Telegram message: {e}")
-            return False
+            return None
     
-    return False
+    return None
 
 
 async def send_photo(

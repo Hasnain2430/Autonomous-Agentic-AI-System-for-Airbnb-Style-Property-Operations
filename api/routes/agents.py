@@ -10,7 +10,10 @@ from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
 
 from database.db import get_db
-from agents.inquiry_booking_agent import InquiryBookingAgent
+from agents.inquiry_booking_agent import InquiryBookingAgent  # Deprecated, kept for backward compatibility
+from agents.inquiry_agent import InquiryAgent
+from agents.booking_agent import BookingAgent
+from api.utils.agent_router import determine_agent, update_agent_context
 from api.utils.logging import log_event, EventType
 
 router = APIRouter()
@@ -45,8 +48,57 @@ async def process_inquiry_booking(
     This endpoint processes messages from guests and returns agent responses.
     """
     try:
-        # Initialize agent
-        agent = InquiryBookingAgent()
+        # Determine which agent to use
+        agent_type = determine_agent(
+            db=db,
+            guest_telegram_id=request.guest_telegram_id,
+            property_id=request.property_id,
+            message=request.message,
+            conversation_history=request.conversation_history
+        )
+        
+        # Initialize appropriate agent
+        if agent_type == "booking":
+            agent = BookingAgent()
+            result = agent.handle_booking(
+                db=db,
+                message=request.message,
+                property_id=request.property_id,
+                guest_telegram_id=request.guest_telegram_id,
+                conversation_history=request.conversation_history
+            )
+            update_agent_context(
+                db=db,
+                guest_telegram_id=request.guest_telegram_id,
+                property_id=request.property_id,
+                agent_name="booking",
+                booking_intent=True
+            )
+        else:
+            agent = InquiryAgent()
+            result = agent.handle_inquiry(
+                db=db,
+                message=request.message,
+                property_id=request.property_id,
+                guest_telegram_id=request.guest_telegram_id,
+                conversation_history=request.conversation_history
+            )
+            if result.get("action") == "transition_to_booking":
+                update_agent_context(
+                    db=db,
+                    guest_telegram_id=request.guest_telegram_id,
+                    property_id=request.property_id,
+                    agent_name="booking",
+                    booking_intent=True
+                )
+            else:
+                update_agent_context(
+                    db=db,
+                    guest_telegram_id=request.guest_telegram_id,
+                    property_id=request.property_id,
+                    agent_name="inquiry",
+                    booking_intent=False
+                )
         
         # Log incoming request
         log_event(
@@ -57,17 +109,9 @@ async def process_inquiry_booking(
             metadata={
                 "guest_telegram_id": request.guest_telegram_id,
                 "property_id": request.property_id,
-                "message": request.message[:100]  # First 100 chars
+                "message": request.message[:100],  # First 100 chars
+                "agent_type": agent_type
             }
-        )
-        
-        # Process message with agent
-        result = agent.handle_inquiry(
-            db=db,
-            message=request.message,
-            property_id=request.property_id,
-            guest_telegram_id=request.guest_telegram_id,
-            conversation_history=request.conversation_history
         )
         
         # Log agent response
@@ -94,7 +138,7 @@ async def process_inquiry_booking(
             log_event(
                 db=db,
                 event_type=EventType.AGENT_ERROR,
-                agent_name="InquiryBookingAgent",
+                agent_name="AgentRouter",
                 message=f"Error processing inquiry: {str(e)}",
                 metadata={"error": str(e)}
             )

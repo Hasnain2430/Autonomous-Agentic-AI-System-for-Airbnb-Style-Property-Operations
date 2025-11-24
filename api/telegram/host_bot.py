@@ -327,12 +327,14 @@ async def send_payment_approval_request(
     
     customer_name = booking.customer_name or booking_details.get("guest_name") or f"Guest {booking.guest_telegram_id}"
     customer_bank = booking.customer_bank_name or booking_details.get("customer_bank_name") or "Not specified"
-    amount = (
-        booking_details.get("amount")
-        or booking.final_price
-        or booking.requested_price
-        or 0
-    )
+    
+    # Calculate amount (handle None values)
+    amount = booking_details.get("amount")
+    if amount is None:
+        amount = booking.final_price or booking.requested_price
+    if amount is None:
+        # Fallback: calculate from property base price
+        amount = booking.property.base_price * booking.number_of_nights
     
     message = (
         "💰 Payment Verification Request\n\n"

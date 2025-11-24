@@ -19,7 +19,10 @@ from api.utils.payment import (
     clear_pending_payment_request,
 )
 from database.models import Booking, Property, SystemLog
-from agents.inquiry_booking_agent import InquiryBookingAgent
+from agents.inquiry_booking_agent import InquiryBookingAgent  # Deprecated, kept for backward compatibility
+from agents.inquiry_agent import InquiryAgent
+from agents.booking_agent import BookingAgent
+from api.utils.agent_router import determine_agent, update_agent_context
 
 # Global state for /clear confirmation flow
 CLEAR_CONFIRMATION_STATE: Dict[str, int] = {}
@@ -139,17 +142,45 @@ async def handle_guest_message(
                 )
                 return {"status": "command_processed", "command": "clear_confirm_warning"}
             elif state == 2:
+                # Delete all guest data
                 pending_event, _ = get_pending_payment_request(db, user_id)
                 if pending_event:
                     await clear_pending_payment_request(db, pending_event)
                 _delete_guest_history(db, user_id)
                 _reset_clear_state(user_id)
-                await send_message(
-                    bot_token=get_bot_token("guest"),
-                    chat_id=chat_id,
-                    message="✅ Conversation reset complete. All stored context has been deleted. You can start fresh now!"
+                
+                # Get and delete bot messages
+                from api.telegram.message_tracker import get_bot_message_ids, delete_bot_messages
+                bot_token = get_bot_token("guest")
+                if bot_token:
+                    message_ids = get_bot_message_ids(db, user_id, limit=100)
+                    if message_ids:
+                        deleted_count = await delete_bot_messages(bot_token, chat_id, message_ids)
+                        print(f"Deleted {deleted_count} bot messages for user {user_id}")
+                
+                # Clear conversation context completely
+                from api.utils.conversation_context import save_conversation_context
+                save_conversation_context(
+                    db,
+                    user_id,
+                    None,  # No property_id - clear all
+                    {
+                        "active_agent": None,
+                        "booking_intent": False,
+                        "dates": None,
+                        "negotiated_price": None,
+                        "negotiated_dates": None,
+                    }
                 )
-                return {"status": "command_processed", "command": "clear_confirm_done"}
+                
+                # Send final message (this will be the only message left)
+                final_msg_id = await send_message(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    message="✅ All data has been deleted. Please use /start to begin a new conversation.\n\nNote: Your messages cannot be deleted (Telegram limitation), but all bot messages and stored data have been removed."
+                )
+                
+                return {"status": "command_processed", "command": "clear_confirm_done", "require_start": True}
             else:
                 await send_message(
                     bot_token=get_bot_token("guest"),
@@ -162,36 +193,30 @@ async def handle_guest_message(
     if parsed["is_command"] and parsed["command"] == "start":
         bot_token = get_bot_token("guest")
         if bot_token:
-            # Get all properties for the welcome message
-            properties = db.query(Property).all()
+            # Reset conversation context
+            from api.utils.conversation_context import save_conversation_context
+            save_conversation_context(
+                db,
+                user_id,
+                None,
+                {
+                    "active_agent": "inquiry",
+                    "booking_intent": False,
+                }
+            )
             
-            if not properties:
-                welcome_message = """Welcome! 👋
+            welcome_message = """Welcome! 👋
 
-I'm your property booking assistant. I can help you with:
-- Checking property availability
-- Getting pricing information
-- Making bookings
-- Answering questions about properties
+I'm your autonomous property booking assistant. I can help you with:
+• Checking property availability
+• Getting pricing information
+• Making bookings
+• Answering questions about properties
 
-However, no properties are currently available. Please contact the host for more information."""
-            else:
-                welcome_message = "Welcome! 👋\n\n"
-                welcome_message += "I'm your property booking assistant. I can help you with:\n"
-                welcome_message += "- Checking property availability\n"
-                welcome_message += "- Getting pricing information\n"
-                welcome_message += "- Making bookings\n"
-                welcome_message += "- Answering questions about properties\n\n"
-                welcome_message += "Available Properties:\n\n"
-                
-                for prop in properties:
-                    welcome_message += f"🏠 {prop.name}\n"
-                    welcome_message += f"📍 {prop.location}\n"
-                    welcome_message += f"💰 ${prop.base_price:.2f} per night\n"
-                    welcome_message += f"👥 Max {prop.max_guests} guests\n"
-                    welcome_message += f"🕐 Check-in: {prop.check_in_time} | Check-out: {prop.check_out_time}\n\n"
-                
-                welcome_message += "Just ask me about availability, pricing, or anything else about these properties!"
+📋 **Menu:**
+/inquiry - Get information about available properties and start a booking inquiry
+
+Just use /inquiry to begin, or ask me anything about our properties!"""
             
             await send_message(
                 bot_token=bot_token,
@@ -201,6 +226,56 @@ However, no properties are currently available. Please contact the host for more
             )
             
             return {"status": "command_processed", "command": "start"}
+    
+    # Handle /inquiry command
+    if parsed["is_command"] and parsed["command"] == "inquiry":
+        bot_token = get_bot_token("guest")
+        if bot_token:
+            # Get all properties for the inquiry message
+            properties = db.query(Property).all()
+            
+            # Reset to inquiry agent
+            from api.utils.conversation_context import save_conversation_context
+            save_conversation_context(
+                db,
+                user_id,
+                None,
+                {
+                    "active_agent": "inquiry",
+                    "booking_intent": False,
+                }
+            )
+            
+            if not properties:
+                inquiry_message = """📋 **Property Inquiry**
+
+I'm sorry, no properties are currently available. Please contact the host for more information.
+
+You can ask me questions about properties, availability, or pricing anytime!"""
+            else:
+                inquiry_message = "📋 **Available Properties:**\n\n"
+                
+                for prop in properties:
+                    inquiry_message += f"🏠 **{prop.name}**\n"
+                    inquiry_message += f"📍 {prop.location}\n"
+                    inquiry_message += f"💰 ${prop.base_price:.2f} per night\n"
+                    inquiry_message += f"👥 Max {prop.max_guests} guests\n"
+                    inquiry_message += f"🕐 Check-in: {prop.check_in_time} | Check-out: {prop.check_out_time}\n\n"
+                
+                inquiry_message += "You can now ask me about:\n"
+                inquiry_message += "• Availability for specific dates\n"
+                inquiry_message += "• Pricing information\n"
+                inquiry_message += "• Property details\n"
+                inquiry_message += "• Booking inquiries"
+            
+            await send_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message=inquiry_message,
+                timeout=10
+            )
+            
+            return {"status": "command_processed", "command": "inquiry"}
     
     # If we are awaiting customer payment details, intercept the message before other handling
     pending_event = None
@@ -252,10 +327,21 @@ However, no properties are currently available. Please contact the host for more
             )
             return {"status": "error", "message": "No dates in context"}
         
+        # Get price from context or calculate from property
+        negotiated_price = pending_metadata.get("negotiated_price") or context.get("negotiated_price")
+        if not negotiated_price:
+            # Calculate from property base price
+            from datetime import datetime
+            check_in = datetime.strptime(dates["check_in"], "%Y-%m-%d")
+            check_out = datetime.strptime(dates["check_out"], "%Y-%m-%d")
+            nights = (check_out - check_in).days
+            negotiated_price = property_obj.base_price * nights
+        
         booking_details = {
             "check_in": dates["check_in"],
             "check_out": dates["check_out"],
-            "final_price": pending_metadata.get("negotiated_price") or context.get("negotiated_price"),
+            "final_price": negotiated_price,
+            "requested_price": negotiated_price,  # Also set requested_price
             "number_of_guests": 1,
             "customer_name": customer_name,
             "customer_bank_name": customer_bank_name,
@@ -394,6 +480,17 @@ However, no properties are currently available. Please contact the host for more
             )
             return {"status": "error", "message": "Failed to process payment screenshot"}
     
+    # Check if user needs to start conversation (after /clear)
+    context = get_conversation_context(db, user_id, None)
+    if context.get("active_agent") is None and not parsed["is_command"]:
+        # User cleared conversation but hasn't started new one
+        await send_message(
+            bot_token=get_bot_token("guest"),
+            chat_id=chat_id,
+            message="Please use /start to begin a new conversation."
+        )
+        return {"status": "require_start"}
+    
     # Route message to Inquiry & Booking Agent
     bot_token = get_bot_token("guest")
     if bot_token and text:
@@ -426,10 +523,8 @@ However, no properties are currently available. Please contact the host for more
             print(f"Warning: Could not send thinking message: {e}")
             # Continue anyway - this is not critical
         
-        # Initialize agent and process message
+        # Determine which agent to use
         try:
-            agent = InquiryBookingAgent()
-            
             # Get conversation history for context
             conversation_history = get_conversation_history(
                 db=db,
@@ -438,14 +533,63 @@ However, no properties are currently available. Please contact the host for more
                 limit=10  # Last 10 messages
             )
             
-            # Process message with agent (this may take time for LLM call)
-            result = agent.handle_inquiry(
+            # Use router to determine which agent to use
+            agent_type = determine_agent(
                 db=db,
-                message=text,
-                property_id=property_obj.id,
                 guest_telegram_id=user_id,
+                property_id=property_obj.id,
+                message=text,
                 conversation_history=conversation_history
             )
+            
+            # Initialize appropriate agent
+            if agent_type == "booking":
+                agent = BookingAgent()
+                # Process message with booking agent
+                result = agent.handle_booking(
+                    db=db,
+                    message=text,
+                    property_id=property_obj.id,
+                    guest_telegram_id=user_id,
+                    conversation_history=conversation_history
+                )
+                # Update context with active agent
+                update_agent_context(
+                    db=db,
+                    guest_telegram_id=user_id,
+                    property_id=property_obj.id,
+                    agent_name="booking",
+                    booking_intent=True
+                )
+            else:
+                agent = InquiryAgent()
+                # Process message with inquiry agent
+                result = agent.handle_inquiry(
+                    db=db,
+                    message=text,
+                    property_id=property_obj.id,
+                    guest_telegram_id=user_id,
+                    conversation_history=conversation_history
+                )
+                # Check if inquiry agent wants to transition to booking
+                if result.get("action") == "transition_to_booking":
+                    # Update context to mark booking intent
+                    update_agent_context(
+                        db=db,
+                        guest_telegram_id=user_id,
+                        property_id=property_obj.id,
+                        agent_name="booking",
+                        booking_intent=True
+                    )
+                else:
+                    # Update context to mark inquiry agent
+                    update_agent_context(
+                        db=db,
+                        guest_telegram_id=user_id,
+                        property_id=property_obj.id,
+                        agent_name="inquiry",
+                        booking_intent=False
+                    )
             
             # Send agent response to guest
             response_text = result.get("response", "I'm sorry, I couldn't process that.")
@@ -467,13 +611,20 @@ However, no properties are currently available. Please contact the host for more
             
             # Send response with retry logic
             try:
-                success = await send_message(
+                message_id = await send_message(
                     bot_token=bot_token,
                     chat_id=chat_id,
                     message=response_text,
                     timeout=10,  # Shorter timeout, will retry
-                    retries=2    # Retry twice
+                    retries=2,    # Retry twice
+                    return_message_id=True
                 )
+                success = message_id is not None
+                
+                # Store message ID for potential deletion
+                if message_id:
+                    from api.telegram.message_tracker import store_bot_message_id
+                    store_bot_message_id(db, user_id, message_id, property_obj.id)
                 
                 # Delete the "thinking" message if we sent one
                 if thinking_message_id and success:
@@ -498,7 +649,7 @@ However, no properties are currently available. Please contact the host for more
                         log_event(
                             db=db,
                             event_type=EventType.AGENT_ERROR,
-                            agent_name="InquiryBookingAgent",
+                            agent_name=agent.agent_name,
                             message=f"Failed to send response to guest {user_id}",
                             metadata={"chat_id": chat_id, "user_id": user_id}
                         )

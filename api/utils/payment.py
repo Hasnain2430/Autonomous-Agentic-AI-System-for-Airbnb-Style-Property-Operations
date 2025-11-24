@@ -254,11 +254,17 @@ async def send_payment_to_host(
         if not host or not host.telegram_id:
             return False
         
+        # Calculate amount (handle None values)
+        amount = booking.final_price or booking.requested_price
+        if amount is None:
+            # Fallback: calculate from property base price
+            amount = property_obj.base_price * booking.number_of_nights
+        
         # Prepare booking details
         booking_details = {
             "guest_name": booking.guest_name or f"Guest {booking.guest_telegram_id}",
             "property_name": property_obj.name,
-            "amount": booking.final_price or booking.requested_price or 0,
+            "amount": amount,
             "check_in": booking.check_in_date.strftime('%Y-%m-%d'),
             "check_out": booking.check_out_date.strftime('%Y-%m-%d'),
             "nights": booking.number_of_nights,
@@ -344,20 +350,28 @@ async def confirm_booking(
         from api.telegram.base import get_bot_token, send_message
         bot_token = get_bot_token("guest")
         if bot_token:
+            # Calculate total price (handle None values)
+            total_price = booking.final_price or booking.requested_price
+            if total_price is None:
+                # Fallback: calculate from property base price
+                total_price = booking.property.base_price * booking.number_of_nights
+            
             confirmation_message = (
                 f"✅ Booking Confirmed!\n\n"
                 f"Your booking has been confirmed:\n"
                 f"Property: {booking.property.name}\n"
                 f"Check-in: {booking.check_in_date.strftime('%B %d, %Y')}\n"
                 f"Check-out: {booking.check_out_date.strftime('%B %d, %Y')}\n"
-                f"Total: ${booking.final_price or booking.requested_price:.2f}\n\n"
+                f"Total: ${total_price:.2f}\n\n"
                 f"Check-in instructions will be sent to you before your arrival."
             )
-            await send_message(
+            success = await send_message(
                 bot_token=bot_token,
                 chat_id=booking.guest_telegram_id,
                 message=confirmation_message
             )
+            if not success:
+                print(f"Warning: Failed to send confirmation to guest {booking.guest_telegram_id}")
         
         return True
         
