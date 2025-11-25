@@ -100,15 +100,27 @@ def seed_dummy_data(reset=False):
         property1.set_faqs([
             {
                 "question": "Is WiFi available?",
-                "answer": "Yes, WiFi is available at Lakeside Loft. The network name is 'Lakeside_Guest' and the password is 'Welcome2025'. The WiFi password is also provided in your check-in instructions."
+                "answer": "Yes, WiFi is available. Network name: Lakeside_Guest, Password: Welcome2025"
+            },
+            {
+                "question": "What is the WiFi password?",
+                "answer": "Yes, WiFi is available. Network name: Lakeside_Guest, Password: Welcome2025"
+            },
+            {
+                "question": "Is there air conditioning?",
+                "answer": "Yes, the property has air conditioning."
+            },
+            {
+                "question": "Is there a TV?",
+                "answer": "Yes, the property has a TV."
             },
             {
                 "question": "Is parking available?",
-                "answer": "Yes, free parking is available on-site. You can park in the designated guest parking area near the main entrance."
+                "answer": "Yes, parking is available at the property."
             },
             {
-                "question": "What amenities are included?",
-                "answer": "The property includes WiFi, parking, fully equipped kitchen, air conditioning, heating, and all basic amenities. Linens and towels are provided."
+                "question": "Is there a kitchen?",
+                "answer": "Yes, the property has a kitchen."
             }
         ])
         db.commit()
@@ -135,11 +147,27 @@ def seed_dummy_data(reset=False):
         property2.set_faqs([
             {
                 "question": "Is WiFi available?",
-                "answer": "Yes, high-speed WiFi is available at Downtown Suite. The WiFi details will be provided at check-in at the front desk."
+                "answer": "Yes, WiFi is available. Network name: Downtown_WiFi, Password: Suite2025"
+            },
+            {
+                "question": "What is the WiFi password?",
+                "answer": "Yes, WiFi is available. Network name: Downtown_WiFi, Password: Suite2025"
+            },
+            {
+                "question": "Is there air conditioning?",
+                "answer": "Yes, the property has air conditioning."
+            },
+            {
+                "question": "Is there a TV?",
+                "answer": "Yes, the property has a TV."
             },
             {
                 "question": "Is parking available?",
-                "answer": "Valet parking is available for an additional fee. Self-parking is also available nearby. Please contact the front desk for parking options."
+                "answer": "Yes, valet parking is available."
+            },
+            {
+                "question": "Is there a kitchen?",
+                "answer": "Yes, the property has a kitchenette."
             }
         ])
         db.commit()

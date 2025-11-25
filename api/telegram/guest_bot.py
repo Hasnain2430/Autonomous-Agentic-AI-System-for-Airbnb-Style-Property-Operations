@@ -495,14 +495,25 @@ async def handle_guest_message(
             state["step"] = "payment_bank"
             state["data"] = data
             
-            # Get host payment details to show to guest
+            # Get host payment details to show to guest (specific to this property's host)
             property_obj = db.query(Property).filter(Property.id == property_id).first()
             host = property_obj.host if property_obj else None
             payment_methods_text = ""
-            if host:
+            if host and property_obj:
+                # Calculate total amount FIRST
+                check_in = datetime.strptime(data["check_in"], "%Y-%m-%d")
+                check_out = datetime.strptime(data["check_out"], "%Y-%m-%d")
+                nights = (check_out - check_in).days
+                total_price = property_obj.base_price * nights
+                
+                payment_methods_text = f"\n\n💰 **Payment Required:**\n"
+                payment_methods_text += f"• Property: {property_obj.name}\n"
+                payment_methods_text += f"• {nights} night(s) × PKR {property_obj.base_price:,.2f}\n"
+                payment_methods_text += f"• **Total Amount: PKR {total_price:,.2f}**\n"
+                
                 payment_methods_list = host.get_payment_methods()
                 if payment_methods_list:
-                    payment_methods_text = "\n\n💳 **Host Payment Details (Transfer money here):**\n"
+                    payment_methods_text += f"\n💳 **Transfer to ({host.name}):**\n"
                     for pm in payment_methods_list:
                         bank_name = pm.get('bank_name', 'N/A')
                         account_number = pm.get('account_number', 'N/A')
@@ -511,13 +522,6 @@ async def handle_guest_message(
                         if account_name:
                             payment_methods_text += f" ({account_name})"
                         payment_methods_text += "\n"
-                    
-                    # Calculate total amount
-                    check_in = datetime.strptime(data["check_in"], "%Y-%m-%d")
-                    check_out = datetime.strptime(data["check_out"], "%Y-%m-%d")
-                    nights = (check_out - check_in).days
-                    total_price = property_obj.base_price * nights
-                    payment_methods_text += f"\n💰 **Amount to Pay: PKR {total_price:,.2f}**"
             
             await send_message(
                 bot_token=get_bot_token("guest"),
@@ -544,14 +548,22 @@ async def handle_guest_message(
             state["data"] = data
             BOOKING_QUESTIONS_STATE[user_id] = state
             
-            # Get payment methods
+            # Get payment methods from the specific property's host
             property_obj = db.query(Property).filter(Property.id == property_id).first()
             host = property_obj.host if property_obj else None
             payment_methods_text = ""
-            if host and host.payment_methods:
-                payment_methods_text = "\n\n**Payment Methods:**\n"
-                for pm in host.payment_methods:
-                    payment_methods_text += f"• {pm.get('bank_name', 'N/A')}: {pm.get('account_number', 'N/A')}\n"
+            if host:
+                payment_methods_list = host.get_payment_methods()
+                if payment_methods_list:
+                    payment_methods_text = f"\n\n💳 **Pay to {host.name}:**\n"
+                    for pm in payment_methods_list:
+                        bank_name = pm.get('bank_name', 'N/A')
+                        account_number = pm.get('account_number', 'N/A')
+                        account_name = pm.get('account_name', '')
+                        payment_methods_text += f"• **{bank_name}**: {account_number}"
+                        if account_name:
+                            payment_methods_text += f" ({account_name})"
+                        payment_methods_text += "\n"
             
             await send_message(
                 bot_token=get_bot_token("guest"),
@@ -687,25 +699,98 @@ You can ask me questions about properties, availability, or pricing anytime!"""
                     Booking.booking_status == 'confirmed'
                 ).all()
                 
+                # Get selected property from context
+                selected_property = None
+                context = get_conversation_context(db, user_id, None)
+                if context.get("selected_property_id"):
+                    selected_property = db.query(Property).filter(
+                        Property.id == context.get("selected_property_id")
+                    ).first()
+                
+                # If guest has bookings, use that property
+                if not selected_property and confirmed_bookings:
+                    selected_property = confirmed_bookings[0].property
+                
+                # If still no property, use first available
+                if not selected_property and properties:
+                    selected_property = properties[0]
+                
+                # Build property info and amenities
+                property_info = ""
+                amenities_text = ""
+                if selected_property:
+                    property_info = f"\n🏠 **{selected_property.name}**\n"
+                    property_info += f"📍 {selected_property.location}\n"
+                    property_info += f"💰 PKR {selected_property.base_price:,.2f}/night\n"
+                    property_info += f"👥 Max {selected_property.max_guests} guests\n"
+                    property_info += f"🕐 Check-in: {selected_property.check_in_time} | Check-out: {selected_property.check_out_time}\n"
+                    
+                    # Build amenities from FAQs
+                    faqs = selected_property.get_faqs()
+                    if faqs:
+                        amenities_text = "\n📦 **Amenities:**\n"
+                        wifi_info = None
+                        has_ac = False
+                        has_tv = False
+                        has_parking = False
+                        has_kitchen = False
+                        
+                        for faq in faqs:
+                            if isinstance(faq, dict):
+                                q = faq.get('question', '').lower()
+                                a = faq.get('answer', '')
+                                
+                                if 'wifi' in q and 'password' in q.lower():
+                                    wifi_info = a
+                                elif 'wifi' in q and 'yes' in a.lower():
+                                    wifi_info = a
+                                elif 'air conditioning' in q and 'yes' in a.lower():
+                                    has_ac = True
+                                elif 'tv' in q and 'yes' in a.lower():
+                                    has_tv = True
+                                elif 'parking' in q and 'yes' in a.lower():
+                                    has_parking = True
+                                elif 'kitchen' in q and 'yes' in a.lower():
+                                    has_kitchen = True
+                        
+                        if wifi_info:
+                            amenities_text += f"📶 WiFi: {wifi_info}\n"
+                        if has_ac:
+                            amenities_text += "❄️ Air Conditioning: ✓\n"
+                        if has_tv:
+                            amenities_text += "📺 TV: ✓\n"
+                        if has_parking:
+                            amenities_text += "🚗 Parking: ✓\n"
+                        if has_kitchen:
+                            amenities_text += "🍳 Kitchen: ✓\n"
+                
+                # Build the message
                 if confirmed_bookings:
                     booking_info = "📋 **Q&A - You have active bookings!**\n\n"
+                    booking_info += "**Your Bookings:**\n"
                     for booking in confirmed_bookings:
-                        booking_info += f"• {booking.property.name} - Check-in: {booking.check_in_date.strftime('%B %d, %Y')}\n"
-                    booking_info += "\nYou can ask me questions about:\n"
-                    booking_info += "• Your bookings\n"
-                    booking_info += "• Property details\n"
-                    booking_info += "• Check-in/check-out procedures\n"
-                    booking_info += "• General inquiries\n\n"
-                    booking_info += "Just ask your question!"
+                        booking_info += f"✅ {booking.property.name}\n"
+                        booking_info += f"   Check-in: {booking.check_in_date.strftime('%B %d, %Y')}\n"
+                        booking_info += f"   Check-out: {booking.check_out_date.strftime('%B %d, %Y')}\n"
+                    booking_info += property_info
+                    booking_info += amenities_text
+                    booking_info += "\n💬 **Ask me anything!**\n"
+                    booking_info += "Examples:\n"
+                    booking_info += "• What's the WiFi password?\n"
+                    booking_info += "• Is parking available?\n"
+                    booking_info += "• What time is check-in?\n"
+                    booking_info += "• How do I get to the property?"
                 else:
-                    booking_info = "📋 **Q&A**\n\n"
-                    booking_info += "I'm here to answer your questions about:\n"
-                    booking_info += "• Available properties\n"
-                    booking_info += "• Booking procedures\n"
-                    booking_info += "• Pricing and availability\n"
-                    booking_info += "• Property details and amenities\n"
-                    booking_info += "• General inquiries\n\n"
-                    booking_info += "Just ask your question!"
+                    booking_info = "📋 **Q&A Assistant**\n"
+                    booking_info += property_info
+                    booking_info += amenities_text
+                    booking_info += "\n💬 **Ask me anything!**\n"
+                    booking_info += "Examples:\n"
+                    booking_info += "• What's the WiFi password?\n"
+                    booking_info += "• Is parking available?\n"
+                    booking_info += "• What amenities are included?\n"
+                    booking_info += "• What's the price per night?\n"
+                    booking_info += "• How many guests can stay?"
                 
                 await send_message(
                     bot_token=bot_token,

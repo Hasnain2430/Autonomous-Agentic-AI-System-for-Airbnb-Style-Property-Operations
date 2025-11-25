@@ -205,110 +205,7 @@ async def handle_host_message(
             )
             return {"status": "command_processed", "command": "unknown"}
     
-    # Handle payment approval/rejection
-    # Check if there's a pending payment approval for this host
     text_lower = text.lower().strip()
-    if text_lower in ["yes", "y", "approve", "confirm", "verified", "verify"]:
-        # Find pending booking for this host
-        host = db.query(Host).filter(Host.telegram_id == user_id).first()
-        if not host:
-            await send_message(
-                bot_token=bot_token,
-                chat_id=chat_id,
-                message="Host not found. Please set up your host profile first using /setup"
-            )
-            return {"status": "error", "message": "Host not found"}
-        
-        # Get pending bookings for this host's properties
-        from database.models import Property
-        properties = db.query(Property).filter(Property.host_id == host.id).all()
-        property_ids = [p.id for p in properties]
-        
-        pending_booking = db.query(Booking).filter(
-            Booking.property_id.in_(property_ids),
-            Booking.payment_status == 'pending',
-            Booking.booking_status == 'pending'
-        ).order_by(Booking.created_at.desc()).first()
-        
-        if pending_booking:
-            # Approve booking
-            from api.utils.payment import confirm_booking
-            success = await confirm_booking(db=db, booking_id=pending_booking.id)
-            
-            if success:
-                await send_message(
-                    bot_token=bot_token,
-                    chat_id=chat_id,
-                    message=f"✅ Payment approved! Booking #{pending_booking.id} has been confirmed. The guest has been notified."
-                )
-                return {"status": "payment_approved", "booking_id": pending_booking.id}
-            else:
-                await send_message(
-                    bot_token=bot_token,
-                    chat_id=chat_id,
-                    message="❌ Error confirming booking. Please try again."
-                )
-                return {"status": "error", "message": "Failed to confirm booking"}
-        else:
-            await send_message(
-                bot_token=bot_token,
-                chat_id=chat_id,
-                message="No pending payment requests found. If you just received a payment request, please wait a moment and try again."
-            )
-            return {"status": "no_pending_booking"}
-    
-    elif text_lower in ["no", "n", "reject", "decline"]:
-        # Find pending booking for this host
-        host = db.query(Host).filter(Host.telegram_id == user_id).first()
-        if not host:
-            await send_message(
-                bot_token=bot_token,
-                chat_id=chat_id,
-                message="Host not found. Please set up your host profile first using /setup"
-            )
-            return {"status": "error", "message": "Host not found"}
-        
-        # Get pending bookings for this host's properties
-        from database.models import Property
-        properties = db.query(Property).filter(Property.host_id == host.id).all()
-        property_ids = [p.id for p in properties]
-        
-        pending_booking = db.query(Booking).filter(
-            Booking.property_id.in_(property_ids),
-            Booking.payment_status == 'pending',
-            Booking.booking_status == 'pending'
-        ).order_by(Booking.created_at.desc()).first()
-        
-        if pending_booking:
-            # Reject booking
-            from api.utils.payment import reject_booking
-            success = await reject_booking(
-                db=db,
-                booking_id=pending_booking.id,
-                reason="Payment could not be verified. Please contact support if you believe this is an error."
-            )
-            
-            if success:
-                await send_message(
-                    bot_token=bot_token,
-                    chat_id=chat_id,
-                    message=f"❌ Payment rejected. Booking #{pending_booking.id} has been cancelled. The guest has been notified."
-                )
-                return {"status": "payment_rejected", "booking_id": pending_booking.id}
-            else:
-                await send_message(
-                    bot_token=bot_token,
-                    chat_id=chat_id,
-                    message="❌ Error rejecting booking. Please try again."
-                )
-                return {"status": "error", "message": "Failed to reject booking"}
-        else:
-            await send_message(
-                bot_token=bot_token,
-                chat_id=chat_id,
-                message="No pending payment requests found. If you just received a payment request, please wait a moment and try again."
-            )
-            return {"status": "no_pending_booking"}
     
     # Handle cancel command in conversation flow
     if text_lower in ["/cancel", "cancel"] and user_id in _conversation_states:
@@ -519,8 +416,149 @@ async def handle_host_message(
         
         elif step == "property_check_out_time":
             data["check_out_time"] = text
+            state["step"] = "property_wifi"
+            state["data"] = data
+            await send_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message=f"Check-out time saved: {text}\n\n"
+                        f"📶 **Amenities Questions**\n\n"
+                        f"Does your property have WiFi?\n"
+                        f"Reply 'yes' or 'no':"
+            )
+            return {"status": "conversation_state_handled"}
+        
+        elif step == "property_wifi":
+            has_wifi = text.lower() in ["yes", "y", "yeah", "yep", "true", "1"]
+            data["has_wifi"] = has_wifi
+            if has_wifi:
+                state["step"] = "property_wifi_name"
+                state["data"] = data
+                await send_message(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    message="Great! What is the WiFi network name?"
+                )
+            else:
+                state["step"] = "property_ac"
+                state["data"] = data
+                await send_message(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    message="No WiFi - noted.\n\n"
+                            "❄️ Does your property have air conditioning?\n"
+                            "Reply 'yes' or 'no':"
+                )
+            return {"status": "conversation_state_handled"}
+        
+        elif step == "property_wifi_name":
+            data["wifi_name"] = text
+            state["step"] = "property_wifi_password"
+            state["data"] = data
+            await send_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message=f"WiFi name saved: {text}\n\nWhat is the WiFi password?"
+            )
+            return {"status": "conversation_state_handled"}
+        
+        elif step == "property_wifi_password":
+            data["wifi_password"] = text
+            state["step"] = "property_ac"
+            state["data"] = data
+            await send_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message=f"WiFi password saved.\n\n"
+                        f"❄️ Does your property have air conditioning?\n"
+                        f"Reply 'yes' or 'no':"
+            )
+            return {"status": "conversation_state_handled"}
+        
+        elif step == "property_ac":
+            has_ac = text.lower() in ["yes", "y", "yeah", "yep", "true", "1"]
+            data["has_ac"] = has_ac
+            state["step"] = "property_tv"
+            state["data"] = data
+            await send_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message=f"Air conditioning: {'Yes' if has_ac else 'No'}\n\n"
+                        f"📺 Does your property have a TV?\n"
+                        f"Reply 'yes' or 'no':"
+            )
+            return {"status": "conversation_state_handled"}
+        
+        elif step == "property_tv":
+            has_tv = text.lower() in ["yes", "y", "yeah", "yep", "true", "1"]
+            data["has_tv"] = has_tv
+            state["step"] = "property_parking"
+            state["data"] = data
+            await send_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message=f"TV: {'Yes' if has_tv else 'No'}\n\n"
+                        f"🚗 Does your property have parking?\n"
+                        f"Reply 'yes' or 'no':"
+            )
+            return {"status": "conversation_state_handled"}
+        
+        elif step == "property_parking":
+            has_parking = text.lower() in ["yes", "y", "yeah", "yep", "true", "1"]
+            data["has_parking"] = has_parking
+            state["step"] = "property_kitchen"
+            state["data"] = data
+            await send_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message=f"Parking: {'Yes' if has_parking else 'No'}\n\n"
+                        f"🍳 Does your property have a kitchen?\n"
+                        f"Reply 'yes' or 'no':"
+            )
+            return {"status": "conversation_state_handled"}
+        
+        elif step == "property_kitchen":
+            has_kitchen = text.lower() in ["yes", "y", "yeah", "yep", "true", "1"]
+            data["has_kitchen"] = has_kitchen
             state["step"] = "property_finish"
             state["data"] = data
+            
+            # Build FAQs from amenity data
+            faqs = []
+            
+            # WiFi FAQ
+            if data.get("has_wifi"):
+                wifi_answer = f"Yes, WiFi is available. Network name: {data.get('wifi_name', 'N/A')}, Password: {data.get('wifi_password', 'N/A')}"
+                faqs.append({"question": "Is WiFi available?", "answer": wifi_answer})
+                faqs.append({"question": "What is the WiFi password?", "answer": wifi_answer})
+            else:
+                faqs.append({"question": "Is WiFi available?", "answer": "No, WiFi is not available at this property."})
+            
+            # AC FAQ
+            if data.get("has_ac"):
+                faqs.append({"question": "Is there air conditioning?", "answer": "Yes, the property has air conditioning."})
+            else:
+                faqs.append({"question": "Is there air conditioning?", "answer": "No, this property does not have air conditioning."})
+            
+            # TV FAQ
+            if data.get("has_tv"):
+                faqs.append({"question": "Is there a TV?", "answer": "Yes, the property has a TV."})
+            else:
+                faqs.append({"question": "Is there a TV?", "answer": "No, this property does not have a TV."})
+            
+            # Parking FAQ
+            if data.get("has_parking"):
+                faqs.append({"question": "Is parking available?", "answer": "Yes, parking is available at the property."})
+            else:
+                faqs.append({"question": "Is parking available?", "answer": "No, parking is not available at this property."})
+            
+            # Kitchen FAQ
+            if data.get("has_kitchen"):
+                faqs.append({"question": "Is there a kitchen?", "answer": "Yes, the property has a kitchen."})
+            else:
+                faqs.append({"question": "Is there a kitchen?", "answer": "No, this property does not have a kitchen."})
+            
+            data["faqs"] = faqs
             
             # Get host
             host = _ensure_host_record(db, user_id)
@@ -540,19 +578,42 @@ async def handle_host_message(
                     check_in_time=data["check_in_time"],
                     check_out_time=data["check_out_time"]
                 )
+                
+                # Save FAQs to property
+                property.set_faqs(faqs)
+                db.commit()
+                
                 _conversation_states.pop(user_id, None)
+                
+                # Build amenities summary
+                amenities = []
+                if data.get("has_wifi"):
+                    amenities.append(f"📶 WiFi: {data.get('wifi_name', 'Available')}")
+                if data.get("has_ac"):
+                    amenities.append("❄️ Air Conditioning")
+                if data.get("has_tv"):
+                    amenities.append("📺 TV")
+                if data.get("has_parking"):
+                    amenities.append("🚗 Parking")
+                if data.get("has_kitchen"):
+                    amenities.append("🍳 Kitchen")
+                
+                amenities_text = "\n".join(amenities) if amenities else "None specified"
+                
                 await send_message(
                     bot_token=bot_token,
                     chat_id=chat_id,
                     message=f"✅ Property added successfully!\n\n"
-                            f"Property ID: {property.id}\n"
-                            f"Identifier: {property.property_identifier}\n"
-                            f"Name: {property.name}\n"
-                            f"Location: {property.location}\n"
-                            f"Base Price: PKR {property.base_price:,.2f}/night\n"
-                            f"Max Guests: {property.max_guests}\n"
-                            f"Check-in: {property.check_in_time}\n"
-                            f"Check-out: {property.check_out_time}\n\n"
+                            f"**Property Details:**\n"
+                            f"• ID: {property.id}\n"
+                            f"• Identifier: {property.property_identifier}\n"
+                            f"• Name: {property.name}\n"
+                            f"• Location: {property.location}\n"
+                            f"• Base Price: PKR {property.base_price:,.2f}/night\n"
+                            f"• Max Guests: {property.max_guests}\n"
+                            f"• Check-in: {property.check_in_time}\n"
+                            f"• Check-out: {property.check_out_time}\n\n"
+                            f"**Amenities:**\n{amenities_text}\n\n"
                             f"You can add more properties using /add_property"
                 )
                 log_event(
@@ -590,6 +651,110 @@ async def handle_host_message(
                 message="❌ Unknown step. Please start over with /setup or /add_property"
             )
             return {"status": "error", "message": "Unknown step"}
+    
+    # Handle payment approval/rejection (only if NOT in a conversation state)
+    # This is checked AFTER conversation states to avoid conflicts with yes/no answers in setup flows
+    if text_lower in ["yes", "y", "approve", "confirm", "verified", "verify"]:
+        # Find pending booking for this host
+        host = db.query(Host).filter(Host.telegram_id == user_id).first()
+        if not host:
+            await send_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message="Host not found. Please set up your host profile first using /setup"
+            )
+            return {"status": "error", "message": "Host not found"}
+        
+        # Get pending bookings for this host's properties
+        from database.models import Property
+        properties = db.query(Property).filter(Property.host_id == host.id).all()
+        property_ids = [p.id for p in properties]
+        
+        pending_booking = db.query(Booking).filter(
+            Booking.property_id.in_(property_ids),
+            Booking.payment_status == 'pending',
+            Booking.booking_status == 'pending'
+        ).order_by(Booking.created_at.desc()).first()
+        
+        if pending_booking:
+            # Approve booking
+            from api.utils.payment import confirm_booking
+            success = await confirm_booking(db=db, booking_id=pending_booking.id)
+            
+            if success:
+                await send_message(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    message=f"✅ Payment approved! Booking #{pending_booking.id} has been confirmed. The guest has been notified."
+                )
+                return {"status": "payment_approved", "booking_id": pending_booking.id}
+            else:
+                await send_message(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    message="❌ Error confirming booking. Please try again."
+                )
+                return {"status": "error", "message": "Failed to confirm booking"}
+        else:
+            await send_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message="No pending payment requests found. If you just received a payment request, please wait a moment and try again."
+            )
+            return {"status": "no_pending_booking"}
+    
+    elif text_lower in ["no", "n", "reject", "decline"]:
+        # Find pending booking for this host
+        host = db.query(Host).filter(Host.telegram_id == user_id).first()
+        if not host:
+            await send_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message="Host not found. Please set up your host profile first using /setup"
+            )
+            return {"status": "error", "message": "Host not found"}
+        
+        # Get pending bookings for this host's properties
+        from database.models import Property
+        properties = db.query(Property).filter(Property.host_id == host.id).all()
+        property_ids = [p.id for p in properties]
+        
+        pending_booking = db.query(Booking).filter(
+            Booking.property_id.in_(property_ids),
+            Booking.payment_status == 'pending',
+            Booking.booking_status == 'pending'
+        ).order_by(Booking.created_at.desc()).first()
+        
+        if pending_booking:
+            # Reject booking
+            from api.utils.payment import reject_booking
+            success = await reject_booking(
+                db=db,
+                booking_id=pending_booking.id,
+                reason="Payment could not be verified. Please contact support if you believe this is an error."
+            )
+            
+            if success:
+                await send_message(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    message=f"❌ Payment rejected. Booking #{pending_booking.id} has been cancelled. The guest has been notified."
+                )
+                return {"status": "payment_rejected", "booking_id": pending_booking.id}
+            else:
+                await send_message(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    message="❌ Error rejecting booking. Please try again."
+                )
+                return {"status": "error", "message": "Failed to reject booking"}
+        else:
+            await send_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message="No pending payment requests found. If you just received a payment request, please wait a moment and try again."
+            )
+            return {"status": "no_pending_booking"}
     
     # Default: show help if message doesn't match any flow
     if text:

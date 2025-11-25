@@ -10,4 +10,4 @@ guest booking payment mechanism from guest to host is not working, guest screens
 ✅ dO Hybrid approach fixed QnA and LLM fallback (DONE: Fixed questions for booking/payment, LLM for general inquiries)
 ✅ during profile setup also ask for bank and bank account number from the host so that customers can transfer their money there (DONE: Added bank_name and bank_account steps to /setup flow)
 ✅ change the currency to pakistani rupees rather then dollars (DONE: Replaced all $ with PKR throughout the codebase)
-ask the host some basic questions such as does your property have wifi if yes what is the name and password, does it have air conditioning, does it have a TV installed in it?
+✅ ask the host some basic questions such as does your property have wifi if yes what is the name and password, does it have air conditioning, does it have a TV installed in it? (DONE: Added amenity questions to /add_property flow - WiFi, AC, TV, parking, kitchen)

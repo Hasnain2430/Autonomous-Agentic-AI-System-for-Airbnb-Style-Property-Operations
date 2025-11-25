@@ -372,33 +372,68 @@ async def confirm_booking(
             if not success:
                 print(f"Warning: Failed to send confirmation to guest {booking.guest_telegram_id}")
             
-            # Send check-in instructions
-            check_in_instructions = booking.property.check_in_template
+            # Send check-in instructions with amenities
+            check_in_instructions = booking.property.check_in_template or ""
+            
+            # Build amenities info from FAQs
+            amenities_text = ""
+            faqs = booking.property.get_faqs()
+            if faqs:
+                wifi_info = ""
+                ac_info = ""
+                tv_info = ""
+                parking_info = ""
+                kitchen_info = ""
+                
+                for faq in faqs:
+                    if isinstance(faq, dict):
+                        q = faq.get('question', '').lower()
+                        a = faq.get('answer', '')
+                        
+                        if 'wifi' in q and 'yes' in a.lower():
+                            wifi_info = a
+                        elif 'air conditioning' in q and 'yes' in a.lower():
+                            ac_info = "Yes"
+                        elif 'tv' in q and 'yes' in a.lower():
+                            tv_info = "Yes"
+                        elif 'parking' in q and 'yes' in a.lower():
+                            parking_info = a
+                        elif 'kitchen' in q and 'yes' in a.lower():
+                            kitchen_info = "Yes"
+                
+                amenities_text = "\n\n🏠 **Property Amenities:**\n"
+                if wifi_info:
+                    amenities_text += f"📶 **WiFi:** {wifi_info}\n"
+                if ac_info:
+                    amenities_text += f"❄️ **Air Conditioning:** Available\n"
+                if tv_info:
+                    amenities_text += f"📺 **TV:** Available\n"
+                if parking_info:
+                    amenities_text += f"🚗 **Parking:** {parking_info}\n"
+                if kitchen_info:
+                    amenities_text += f"🍳 **Kitchen:** Available\n"
+            
+            instructions_message = (
+                f"📋 **Check-in Instructions**\n\n"
+                f"**Property:** {booking.property.name}\n"
+                f"**Location:** {booking.property.location}\n"
+                f"**Check-in Time:** {booking.property.check_in_time}\n"
+                f"**Check-out Time:** {booking.property.check_out_time}\n"
+            )
+            
             if check_in_instructions:
-                instructions_message = (
-                    f"📋 **Check-in Instructions**\n\n"
-                    f"{check_in_instructions}\n\n"
-                    f"Check-in Time: {booking.property.check_in_time}\n"
-                    f"Check-out Time: {booking.property.check_out_time}"
-                )
-                await send_message(
-                    bot_token=bot_token,
-                    chat_id=booking.guest_telegram_id,
-                    message=instructions_message
-                )
-            else:
-                # Default message if no template is set
-                default_instructions = (
-                    f"📋 **Check-in Instructions**\n\n"
-                    f"Check-in Time: {booking.property.check_in_time}\n"
-                    f"Check-out Time: {booking.property.check_out_time}\n\n"
-                    f"Please contact the host for detailed check-in instructions."
-                )
-                await send_message(
-                    bot_token=bot_token,
-                    chat_id=booking.guest_telegram_id,
-                    message=default_instructions
-                )
+                instructions_message += f"\n**Instructions:**\n{check_in_instructions}\n"
+            
+            instructions_message += amenities_text
+            
+            if not check_in_instructions and not amenities_text:
+                instructions_message += "\nPlease contact the host for any additional information."
+            
+            await send_message(
+                bot_token=bot_token,
+                chat_id=booking.guest_telegram_id,
+                message=instructions_message
+            )
         
         return True
         
