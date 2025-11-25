@@ -34,6 +34,7 @@ def get_conversation_context(
         "active_agent": None,  # "inquiry" or "booking"
         "booking_intent": False,  # True if user wants to book
         "transition_history": [],  # List of agent transitions
+        "selected_property_id": None,  # Property ID selected via /book_property
     }
     
     query = (
@@ -81,6 +82,10 @@ def get_conversation_context(
         # Persist booking intent
         if metadata.get("booking_intent") is not None:
             context["booking_intent"] = metadata.get("booking_intent")
+        
+        # Persist selected property ID
+        if metadata.get("selected_property_id") and context.get("selected_property_id") is None:
+            context["selected_property_id"] = metadata.get("selected_property_id")
         
         # Persist dates from explicit metadata first
         if not context["dates"] and metadata.get("dates"):
@@ -175,13 +180,7 @@ def get_context_summary_for_llm(
             f"Guest has mentioned dates: Check-in {dates['check_in']}, Check-out {dates['check_out']}"
         )
     
-    if context.get("negotiated_price") and context.get("negotiated_dates"):
-        summary_parts.append(
-            f"Previous negotiation: ${context['negotiated_price']:.2f} for dates "
-            f"{context['negotiated_dates']['check_in']} to {context['negotiated_dates']['check_out']}"
-        )
-        if context.get("dates") and context["dates"] != context["negotiated_dates"]:
-            summary_parts.append("Note: Current dates differ from negotiated dates - price may need adjustment")
+    # Note: negotiated_price removed - prices are now fixed
     
     if context.get("booking_status"):
         summary_parts.append(f"Booking status: {context['booking_status']}")

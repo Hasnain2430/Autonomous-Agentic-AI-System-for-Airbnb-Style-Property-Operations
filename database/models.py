@@ -68,6 +68,7 @@ class Property(Base):
     cleaning_rules = Column(Text, nullable=True)
     check_in_template = Column(Text, nullable=True)
     check_out_template = Column(Text, nullable=True)
+    faqs = Column(Text, nullable=True)  # JSON array of FAQ questions and answers
     photo_paths = Column(Text, nullable=True)  # JSON array of file paths
     cleaner_telegram_id = Column(String, nullable=True)
     cleaner_name = Column(String, nullable=True)
@@ -91,6 +92,19 @@ class Property(Base):
     def set_photo_paths(self, paths_list):
         """Convert Python list to JSON string for photo_paths."""
         self.photo_paths = json.dumps(paths_list) if paths_list else None
+    
+    def get_faqs(self):
+        """Parse FAQs JSON string to Python list."""
+        if self.faqs:
+            try:
+                return json.loads(self.faqs)
+            except json.JSONDecodeError:
+                return []
+        return []
+    
+    def set_faqs(self, faqs_list):
+        """Convert Python list to JSON string for FAQs."""
+        self.faqs = json.dumps(faqs_list) if faqs_list else None
     
     def __repr__(self):
         return f"<Property(id={self.id}, identifier='{self.property_identifier}', name='{self.name}')>"

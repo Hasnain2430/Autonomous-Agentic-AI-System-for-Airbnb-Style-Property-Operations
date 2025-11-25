@@ -1,3 +1,85 @@
+# Property Booking Management System
+
+An autonomous property booking management system with Telegram bots for guests and hosts, featuring AI-powered agents, fixed booking flows, payment verification, and automated reporting.
+
+---
+
+## 🎯 System Overview
+
+This system provides a complete property booking solution with:
+
+- **Guest Bot** - Handles inquiries, bookings, and Q&A using AI agents
+- **Host Bot** - Manages property setup, payment verification, and receives reports
+- **Fixed Booking Flow** - Structured questions for booking and payment details
+- **Payment Verification** - Screenshot-based payment with host approval
+- **Weekly Reports** - Automated reports with booking, payment, and guest statistics
+- **QnA System** - LLM-powered question answering for guests
+- **Multi-Property Support** - Manage multiple properties per host
+
+---
+
+## 📋 Features
+
+### Guest Bot Features
+
+**Commands:**
+- `/start` - Start conversation and view welcome message
+- `/inquiry` - View available properties and ask questions
+- `/book_property` - Select a property and start booking process
+- `/qna` - Ask questions about properties, bookings, or general inquiries
+- `/clear` - Clear conversation history and reset context
+
+**Booking Flow:**
+1. Guest selects property using `/book_property`
+2. System asks fixed questions:
+   - Check-in date
+   - Check-out date
+   - Number of guests
+   - Customer full name
+   - Bank name (payment source)
+   - Payment screenshot upload
+3. Booking summary shown before payment
+4. Screenshot sent to host for verification
+5. Guest receives confirmation after host approval
+6. Check-in instructions sent automatically
+
+**QnA System:**
+- LLM-powered question answering
+- Context-aware responses based on guest's bookings
+- Handles property questions, booking inquiries, and general questions
+
+### Host Bot Features
+
+**Commands:**
+- `/start` - Welcome message and setup instructions
+- `/setup` - Set up host profile (name, email, phone, bank name, bank account)
+- `/add_property` - Add new property step-by-step
+- `/help` - Show all available commands
+- `/cancel` - Cancel current setup flow
+
+**Payment Verification:**
+- Receives payment screenshots from guests
+- Reply with `yes`, `approve`, `verified`, or `verify` to confirm payment
+- Reply with `no`, `reject`, or `decline` to reject payment
+- Booking automatically confirmed/rejected based on response
+
+**Weekly Reports:**
+- Automatic weekly reports sent via Telegram
+- Includes booking statistics, revenue, payment status, and guest counts
+- Property-wise breakdown
+- Recent bookings list
+
+### Key Features
+
+- **Fixed Pricing** - No negotiation, prices are fixed (base price × nights)
+- **Pakistani Rupees (PKR)** - All prices displayed in PKR
+- **Property Selection Required** - Guests must select property before booking
+- **Check-in Instructions** - Automatically sent after payment verification
+- **Multi-step Setup Flows** - Guided setup for hosts and properties
+- **Payment Method Storage** - Host bank details stored for guest payments
+
+---
+
 # How to Run the System
 
 Simple step-by-step guide to get the system running.
@@ -239,6 +321,199 @@ Make sure you have a `.env` file with:
 - `DATABASE_PATH` - Path to database file
 
 See `.env.example` for template.
+
+---
+
+That's it! The system should now be running.
+
+---
+
+## 🚀 Usage Guide
+
+### For Guests
+
+1. **Start Conversation:**
+   - Send `/start` to the guest bot
+   - View available properties with `/inquiry`
+   - Or start booking directly with `/book_property`
+
+2. **Book a Property:**
+   ```
+   /book_property
+   → Select property from list
+   → Answer booking questions (dates, guests)
+   → Provide payment details (name, bank)
+   → Upload payment screenshot
+   → Wait for host verification
+   → Receive confirmation and check-in instructions
+   ```
+
+3. **Ask Questions:**
+   ```
+   /qna
+   → Ask any question about properties or bookings
+   → Get AI-powered responses
+   ```
+
+### For Hosts
+
+1. **Initial Setup:**
+   ```
+   /setup
+   → Provide name, email, phone
+   → Provide bank name and account number
+   → Profile saved
+   ```
+
+2. **Add Properties:**
+   ```
+   /add_property
+   → Provide property details step-by-step:
+     - Property identifier
+     - Name and location
+     - Base price (PKR per night)
+     - Max guests
+     - Check-in/check-out times
+     - Cleaning rules (optional)
+     - Check-in/check-out templates (optional)
+   ```
+
+3. **Verify Payments:**
+   - When payment screenshot received, reply:
+     - `yes` or `verified` → Approve and confirm booking
+     - `no` or `reject` → Reject payment
+
+4. **Receive Reports:**
+   - Weekly reports sent automatically every Monday
+   - Or trigger manually via API endpoint
+
+---
+
+## 📊 Weekly Reports
+
+### Automatic Reports
+
+Reports are sent automatically every Monday (can be scheduled via cron or n8n).
+
+### Manual Trigger
+
+```bash
+# Send to all hosts
+curl -X POST "http://localhost:8000/api/agents/host-summary/weekly"
+
+# Send to specific host
+curl -X POST "http://localhost:8000/api/agents/host-summary/weekly?host_id=1"
+
+# Custom week
+curl -X POST "http://localhost:8000/api/agents/host-summary/weekly?week_start_date=2025-01-06"
+```
+
+### Report Contents
+
+- **Summary Statistics:**
+  - Total bookings (confirmed, pending, cancelled)
+  - Total revenue (PKR)
+  - Payment status breakdown
+  - Total guests and nights
+
+- **Property Breakdown:**
+  - Per-property statistics
+  - Bookings, revenue, guests per property
+
+- **Recent Bookings:**
+  - Last 10 bookings with details
+  - Guest names, dates, amounts, status
+
+---
+
+## 🔧 API Endpoints
+
+### Guest & Host Webhooks
+- `POST /api/webhook/guest` - Guest bot webhook
+- `POST /api/webhook/host` - Host bot webhook
+
+### Agent Endpoints
+- `POST /api/agents/inquiry-booking/process` - Process guest inquiries/bookings
+- `POST /api/agents/host-summary/weekly` - Generate weekly reports
+
+### Booking Endpoints
+- `GET /api/bookings` - List bookings
+- `GET /api/bookings/{id}` - Get booking details
+
+---
+
+## 💾 Database
+
+### Seed Dummy Data
+
+To populate the database with test data:
+
+```bash
+python scripts/seed_dummy_data.py
+```
+
+This creates:
+- Sample host with payment methods
+- Multiple properties
+- Sample bookings
+
+### Reset Database
+
+```bash
+python scripts/seed_dummy_data.py --reset
+```
+
+---
+
+## 🛠️ Development
+
+### Project Structure
+
+```
+Project/
+├── api/
+│   ├── main.py              # FastAPI application
+│   ├── routes/               # API routes
+│   ├── telegram/             # Bot handlers
+│   ├── utils/                # Utilities (logging, payment, reports)
+│   └── agents/               # AI agents
+├── database/
+│   ├── models.py             # SQLAlchemy models
+│   └── db.py                 # Database setup
+├── config/
+│   └── config_manager.py     # Configuration management
+├── scripts/
+│   └── seed_dummy_data.py    # Database seeding
+├── proxy_server.py           # SOCKS5 proxy server
+└── .env                      # Environment variables
+```
+
+### Key Components
+
+- **Agents:** InquiryAgent, BookingAgent (LLM-powered)
+- **Payment System:** Screenshot handling, host verification
+- **Report System:** Weekly report generation and delivery
+- **Conversation Context:** Persistent conversation state
+- **Fixed Questions:** Structured booking and payment flows
+
+---
+
+## 📝 Notes
+
+- **Currency:** All prices are in Pakistani Rupees (PKR)
+- **Pricing:** Fixed pricing only (no negotiation)
+- **Property Selection:** Required before booking (no default property)
+- **Payment:** Screenshot-based with host verification
+- **Reports:** Weekly reports sent automatically or on-demand
+
+---
+
+## 🔐 Security
+
+- VPN required for Telegram API access
+- SOCKS5 proxy for secure connections
+- Environment variables for sensitive data
+- Webhook verification
 
 ---
 

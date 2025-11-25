@@ -362,8 +362,7 @@ async def confirm_booking(
                 f"Property: {booking.property.name}\n"
                 f"Check-in: {booking.check_in_date.strftime('%B %d, %Y')}\n"
                 f"Check-out: {booking.check_out_date.strftime('%B %d, %Y')}\n"
-                f"Total: ${total_price:.2f}\n\n"
-                f"Check-in instructions will be sent to you before your arrival."
+                f"Total: PKR {total_price:,.2f}\n\n"
             )
             success = await send_message(
                 bot_token=bot_token,
@@ -372,6 +371,34 @@ async def confirm_booking(
             )
             if not success:
                 print(f"Warning: Failed to send confirmation to guest {booking.guest_telegram_id}")
+            
+            # Send check-in instructions
+            check_in_instructions = booking.property.check_in_template
+            if check_in_instructions:
+                instructions_message = (
+                    f"📋 **Check-in Instructions**\n\n"
+                    f"{check_in_instructions}\n\n"
+                    f"Check-in Time: {booking.property.check_in_time}\n"
+                    f"Check-out Time: {booking.property.check_out_time}"
+                )
+                await send_message(
+                    bot_token=bot_token,
+                    chat_id=booking.guest_telegram_id,
+                    message=instructions_message
+                )
+            else:
+                # Default message if no template is set
+                default_instructions = (
+                    f"📋 **Check-in Instructions**\n\n"
+                    f"Check-in Time: {booking.property.check_in_time}\n"
+                    f"Check-out Time: {booking.property.check_out_time}\n\n"
+                    f"Please contact the host for detailed check-in instructions."
+                )
+                await send_message(
+                    bot_token=bot_token,
+                    chat_id=booking.guest_telegram_id,
+                    message=default_instructions
+                )
         
         return True
         

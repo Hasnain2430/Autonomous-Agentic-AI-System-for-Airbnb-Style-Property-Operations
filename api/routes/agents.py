@@ -4,7 +4,8 @@ Agent endpoints.
 These endpoints will be used by n8n to call agent functions.
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
+from datetime import datetime
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
@@ -187,13 +188,65 @@ async def handle_cleaning_request():
 
 
 @router.post("/agents/host-summary/weekly")
-async def generate_weekly_report():
+async def generate_weekly_report(
+    host_id: Optional[int] = Query(None, description="Host ID (optional, sends to all if not provided)"),
+    week_start_date: Optional[str] = Query(None, description="Week start date (YYYY-MM-DD, defaults to last Monday)"),
+    db: Session = Depends(get_db)
+):
     """
-    Generate weekly summary report.
+    Generate and send weekly summary report to host(s).
     
-    This endpoint will be implemented when we create the Host Summary Agent.
+    Args:
+        host_id: Optional host ID (if not provided, sends to all hosts)
+        week_start_date: Optional week start date (YYYY-MM-DD, defaults to last Monday)
+        db: Database session
+    
+    Returns:
+        Success message with report details
     """
-    return {"message": "Agent not yet implemented", "status": "placeholder"}
+    from datetime import date
+    from api.utils.weekly_reports import (
+        generate_weekly_report,
+        format_report_message,
+        send_weekly_report_to_host,
+        send_weekly_reports_to_all_hosts
+    )
+    
+    week_start = None
+    if week_start_date:
+        try:
+            week_start = datetime.strptime(week_start_date, "%Y-%m-%d").date()
+        except ValueError:
+            return {"error": "Invalid date format. Use YYYY-MM-DD"}
+    
+    if host_id:
+        # Send to specific host
+        report = generate_weekly_report(db, host_id, week_start)
+        if "error" in report:
+            return {"error": report["error"]}
+        
+        success = await send_weekly_report_to_host(db, host_id, week_start)
+        if success:
+            return {
+                "status": "success",
+                "message": f"Weekly report sent to host {host_id}",
+                "report": {
+                    "week_start": report["week_start"],
+                    "week_end": report["week_end"],
+                    "total_bookings": report["summary"]["total_bookings"],
+                    "total_revenue": report["summary"]["total_revenue"]
+                }
+            }
+        else:
+            return {"error": "Failed to send report to host"}
+    else:
+        # Send to all hosts
+        results = await send_weekly_reports_to_all_hosts(db, week_start)
+        return {
+            "status": "success",
+            "message": f"Weekly reports sent to {results['successful']} hosts",
+            "results": results
+        }
 
 
 @router.post("/agents/host-summary/monthly")

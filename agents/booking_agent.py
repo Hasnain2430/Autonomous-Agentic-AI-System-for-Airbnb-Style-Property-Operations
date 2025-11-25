@@ -75,8 +75,7 @@ class BookingAgent(BaseAgent):
 Property Information:
 - Name: {property_data.get('name', 'Unknown')}
 - Location: {property_data.get('location', 'Unknown')}
-- Base Price: ${property_data.get('base_price', 0):.2f} per night
-- Price Range: ${property_data.get('min_price', 0):.2f} - ${property_data.get('max_price', 0):.2f} per night (INTERNAL ONLY - NEVER reveal this range to customers)
+- Base Price: PKR {property_data.get('base_price', 0):,.2f} per night
 - Max Guests: {property_data.get('max_guests', 1)}
 - Check-in Time: {property_data.get('check_in_time', 'Unknown')}
 - Check-out Time: {property_data.get('check_out_time', 'Unknown')}
@@ -87,31 +86,23 @@ Payment Information:
 - Guest must send payment screenshot for verification
 
 Your role:
-1. Handle price negotiations intelligently (don't immediately accept lowest price)
-2. Confirm bookings when guest agrees
-3. Display payment methods clearly with ALL bank details
-4. Request payment screenshot with customer details (full name, bank name)
-5. Guide guests through the payment process
+1. When guest wants to book, IMMEDIATELY display payment details with host bank information
+2. Display payment methods clearly with ALL bank details
+3. Guide guests through the payment process
+4. Tell them to upload payment screenshot after transfer
 
 IMPORTANT GUIDELINES:
-- ONLY handle booking, negotiation, and payment-related questions
-- If asked about basic property info → politely redirect to inquiry agent
-- NEVER reveal the price range (min/max) to customers - this is confidential
-- When negotiating, only mention the base rate and what you can offer, never mention the range
-- REMEMBER dates and negotiated prices from conversation context
+- ONLY handle booking and payment-related questions
+- Prices are FIXED - base price × number of nights (NO negotiation, NO discounts)
+- If guest asks for discount or negotiation, politely explain that prices are fixed
+- REMEMBER dates from conversation context - NEVER ask again if already provided
 - Use clean, simple formatting - avoid excessive markdown like *** or long dashes
 - Be friendly, professional, and concise
-- Calculate prices accurately
-- When guest wants to book, FIRST ask "Do we continue to payment?" and wait for confirmation
-- After guest confirms, THEN explain payment methods clearly with ALL bank details (no placeholders)
-- Payment explanation should include: all available payment methods (bank name, account name, account number, instructions), amount to pay
-- AFTER explaining payment methods, request payment screenshot along with customer details (full name, bank name they're sending from)
-- NEVER ask for payment screenshot without first explaining payment methods
-- REMEMBER dates from conversation - NEVER ask for check-in/check-out dates if they were already provided
-- If dates are mentioned in conversation history, use them AUTOMATICALLY - don't ask again
-- Only offer discounts for longer stays (3+ nights)
-- If guest changes dates after negotiation, explain that previous rate was for different dates and calculate new price
-- When dates change, reference the previous negotiation and explain why price is different
+- Calculate prices accurately: base price × number of nights
+- IMMEDIATELY show payment methods with ALL bank details when guest confirms booking
+- Payment explanation MUST include: bank name, account number, amount to pay in PKR
+- After showing payment details, tell guest to upload their payment screenshot
+- NEVER mention "booking agent" or "transfer to agent" - you ARE handling the booking
 - Keep responses clear and easy to read
 
 Response Format:
@@ -157,30 +148,13 @@ Current date: {datetime.now().strftime('%Y-%m-%d')}
         nights = (check_out - check_in).days
         base_price = property_obj.base_price
         
-        # Calculate days until check-in (urgency factor)
+        # Calculate days until check-in (for validation only)
         days_until_checkin = (check_in - datetime.now()).days
-        
-        # Dynamic pricing based on urgency
-        urgency_multiplier = 1.0
         if days_until_checkin < 0:
             return {"error": "Check-in date cannot be in the past"}
-        elif days_until_checkin == 0:
-            urgency_multiplier = 1.20
-        elif days_until_checkin == 1:
-            urgency_multiplier = 1.15
-        elif days_until_checkin == 2:
-            urgency_multiplier = 1.10
-        elif days_until_checkin <= 7:
-            urgency_multiplier = 1.05
         
-        # Apply urgency pricing
-        adjusted_price_per_night = base_price * urgency_multiplier
-        
-        # Long-stay discount (for 7+ nights)
-        if nights >= 7:
-            adjusted_price_per_night *= 0.95
-        elif nights >= 14:
-            adjusted_price_per_night *= 0.90
+        # Fixed pricing: base price × number of nights (no discounts, no urgency multipliers)
+        adjusted_price_per_night = base_price
         
         # Calculate totals
         total_base = adjusted_price_per_night * nights
@@ -197,11 +171,6 @@ Current date: {datetime.now().strftime('%Y-%m-%d')}
         
         total = total_base + extra_guest_total
         
-        # Calculate negotiable range (internal only)
-        min_price_per_night = property_obj.min_price
-        if nights >= 7:
-            min_price_per_night = min_price_per_night * 0.95
-        
         return {
             "base_price_per_night": base_price,
             "adjusted_price_per_night": adjusted_price_per_night,
@@ -210,64 +179,9 @@ Current date: {datetime.now().strftime('%Y-%m-%d')}
             "base_total": total_base,
             "num_guests": num_guests,
             "extra_guest_charge": extra_guest_total,
-            "total_price": total,
-            "min_price": min_price_per_night * nights,
-            "max_price": property_obj.max_price * nights,
-            "urgency_multiplier": urgency_multiplier
+            "total_price": total
         }
     
-    def negotiate_price(
-        self,
-        requested_price: float,
-        calculated_price: Dict[str, Any],
-        nights: int = 1
-    ) -> Tuple[bool, float, str]:
-        """
-        Negotiate price within acceptable range.
-        
-        Args:
-            requested_price: Price requested by guest
-            calculated_price: Price breakdown from calculate_price
-            nights: Number of nights (for discount eligibility)
-        
-        Returns:
-            Tuple of (can_negotiate, final_price, message)
-        """
-        min_price = calculated_price.get("min_price", calculated_price["total_price"])
-        max_price = calculated_price.get("max_price", calculated_price["total_price"])
-        base_total = calculated_price["total_price"]
-        
-        # Only offer discounts for longer stays (3+ nights)
-        min_nights_for_discount = 3
-        
-        if requested_price >= base_total:
-            return True, base_total, f"Great! The price is ${base_total:.2f} for your stay."
-        
-        # Check if stay is long enough for discount
-        if nights < min_nights_for_discount:
-            base_per_night = calculated_price.get('adjusted_price_per_night', calculated_price.get('base_price_per_night', 0))
-            return False, base_total, f"For stays of {nights} nights, the rate is ${base_total:.2f} (${base_per_night:.2f} per night). We offer discounts for longer stays of {min_nights_for_discount}+ nights."
-        
-        # Negotiate - don't immediately accept lowest price
-        if requested_price >= min_price:
-            price_per_night = requested_price / nights if nights > 0 else requested_price
-            min_per_night = min_price / nights if nights > 0 else min_price
-            base_per_night = calculated_price.get('adjusted_price_per_night', calculated_price.get('base_price_per_night', 0))
-            
-            # If requesting minimum, negotiate a bit
-            if abs(price_per_night - min_per_night) < 1.0:
-                return True, min_price, f"I can offer you ${min_price:.2f} for your {nights}-night stay (${min_per_night:.2f} per night). This is our best rate for longer stays!"
-            else:
-                # Counter-offer: try to get slightly more than minimum
-                counter_offer = max(min_price, requested_price * 0.95)
-                if counter_offer > requested_price and counter_offer < base_total * 0.9:
-                    return True, counter_offer, f"For your {nights}-night stay, I can offer ${counter_offer:.2f} (${counter_offer/nights:.2f} per night). This is a great rate for a longer stay!"
-                else:
-                    return True, requested_price, f"I can offer you ${requested_price:.2f} for your {nights}-night stay (${price_per_night:.2f} per night). This is our discounted rate for longer stays!"
-        
-        # Below minimum - don't reveal the minimum
-        base_per_night = calculated_price.get('adjusted_price_per_night', calculated_price.get('base_price_per_night', 0))
-        return False, base_total, f"I'm sorry, but I can't go that low. The best I can offer for {nights} nights is ${base_total:.2f} (${base_per_night:.2f} per night). This is already a discounted rate for longer stays."
     
     def handle_booking(
         self,
@@ -376,7 +290,7 @@ Current date: {datetime.now().strftime('%Y-%m-%d')}
                                 prev_price = prev_context["negotiated_price"]
                                 prev_dates = prev_context["negotiated_dates"]
                                 prev_negotiation = (
-                                    f" Previous negotiation: ${prev_price:.2f} for "
+                                    f" Previous negotiation: PKR {prev_price:,.2f} for "
                                     f"{prev_dates['check_in']} to {prev_dates['check_out']}. This price was for different dates."
                                 )
                         except Exception:
@@ -412,12 +326,11 @@ Current date: {datetime.now().strftime('%Y-%m-%d')}
         # Add current message
         messages.append({"role": "user", "content": message})
         
-        # Check for price negotiation requests
+        # Handle price negotiation requests - inform that prices are fixed
         message_lower = message.lower()
-        negotiation_keywords = ["discount", "negotiate", "negotiation", "lower", "cheaper", "deal", "best price", "can you reduce", "reduce price", "long duration", "long stay"]
+        negotiation_keywords = ["discount", "negotiate", "negotiation", "lower", "cheaper", "deal", "best price", "can you reduce", "reduce price"]
         is_negotiation = any(keyword in message_lower for keyword in negotiation_keywords)
         
-        # Handle negotiation
         if is_negotiation and current_dates:
             try:
                 check_in = datetime.strptime(current_dates["check_in"], "%Y-%m-%d")
@@ -427,94 +340,18 @@ Current date: {datetime.now().strftime('%Y-%m-%d')}
                 
                 if "error" not in price_info:
                     base_total = price_info['total_price']
-                    min_total = price_info['min_price']
+                    price_per_night = base_total / nights if nights > 0 else base_total
                     
-                    # Extract requested price if mentioned
-                    price_matches = re.findall(r'\$?(\d+(?:\.\d{2})?)', message)
-                    
-                    if price_matches:
-                        requested_price = float(price_matches[-1])
-                        can_negotiate, final_price, negotiation_msg = self.negotiate_price(
-                            requested_price, price_info, nights=nights
-                        )
-                    else:
-                        # No specific price - offer discount based on stay length
-                        if nights >= 3:
-                            discount_pct = 0.05 if nights < 7 else 0.10
-                            discounted_total = base_total * (1 - discount_pct)
-                            final_price = discounted_total
-                            can_negotiate = True
-                            price_per_night = final_price / nights
-                            negotiation_msg = f"I can offer you a discounted rate of ${price_per_night:.2f} per night for your {nights}-night stay, which comes to ${final_price:.2f} total. This is a {discount_pct*100:.0f}% discount for longer stays!"
-                        else:
-                            final_price = base_total
-                            can_negotiate = False
-                            price_per_night = base_total / nights
-                            negotiation_msg = f"For stays of less than 3 nights, the rate is ${price_per_night:.2f} per night (${base_total:.2f} total). For stays of 3 nights or more, I can offer discounts!"
-                    
-                    # Add negotiation context
-                    if can_negotiate:
-                        if price_matches:
-                            negotiation_context = (
-                                f"\n\n[IMPORTANT: Guest asked for discount/negotiation. They requested ${requested_price:.2f} for {nights} nights. "
-                                f"Base price is ${base_total:.2f}. Negotiated price: ${final_price:.2f}. "
-                                f"Use the negotiation message: '{negotiation_msg}'. DO NOT reveal the minimum price or price range. "
-                                f"DO NOT ask for dates again - dates are already confirmed: {current_dates['check_in']} to {current_dates['check_out']}. "
-                                "REMEMBER this negotiated price for future reference.]"
-                            )
-                        else:
-                            negotiation_context = (
-                                f"\n\n[IMPORTANT: Guest asked for discount/negotiation for their {nights}-night stay. "
-                                f"Base price is ${base_total:.2f}. Negotiated price: ${final_price:.2f}. "
-                                f"Use the negotiation message: '{negotiation_msg}'. DO NOT reveal the minimum price or price range. "
-                                f"DO NOT ask for dates again - dates are already confirmed: {current_dates['check_in']} to {current_dates['check_out']}. "
-                                "REMEMBER this negotiated price for future reference.]"
-                            )
-                    else:
-                        negotiation_context = (
-                            f"\n\n[IMPORTANT: Guest asked for discount/negotiation. Base price is ${base_total:.2f}. "
-                            f"Use the message: '{negotiation_msg}'. DO NOT reveal the minimum price or price range. "
-                            f"DO NOT ask for dates again - dates are already confirmed: {current_dates['check_in']} to {current_dates['check_out']}.]"
-                        )
-                    
-                    messages.insert(-1, {"role": "system", "content": negotiation_context})
-                    
-                    # Save negotiated price to context
-                    try:
-                        requested_price_str = f"${requested_price:.2f}" if price_matches else "not specified"
-                        log_event(
-                            db=db,
-                            event_type=EventType.AGENT_DECISION,
-                            agent_name=self.agent_name,
-                            property_id=property_id,
-                            message=f"Price negotiation: {requested_price_str} requested, ${final_price:.2f} offered for {nights} nights",
-                            metadata={
-                                "guest_telegram_id": guest_telegram_id,
-                                "user_id": guest_telegram_id,
-                                "property_id": property_id,
-                                "requested_price": float(price_matches[-1]) if price_matches else None,
-                                "negotiated_price": final_price,
-                                "negotiated_dates": current_dates,
-                                "nights": nights,
-                                "base_price": base_total
-                            }
-                        )
-                        from api.utils.conversation_context import save_conversation_context
-                        save_conversation_context(
-                            db,
-                            guest_telegram_id,
-                            property_id,
-                            {
-                                "negotiated_price": final_price,
-                                "negotiated_dates": current_dates
-                            }
-                        )
-                    except Exception as e:
-                        print(f"Error saving negotiated price: {e}")
+                    fixed_price_context = (
+                        f"\n\n[IMPORTANT: Guest asked for discount/negotiation. "
+                        f"Prices are FIXED - base price × number of nights. "
+                        f"For {nights} nights, the fixed price is PKR {base_total:,.2f} (PKR {price_per_night:,.2f} per night). "
+                        f"Politely explain that prices are fixed and cannot be negotiated. "
+                        f"DO NOT ask for dates again - dates are already confirmed: {current_dates['check_in']} to {current_dates['check_out']}.]"
+                    )
+                    messages.insert(-1, {"role": "system", "content": fixed_price_context})
             except Exception as e:
-                print(f"Error in negotiation logic: {e}")
-                import traceback
-                traceback.print_exc()
+                print(f"Error handling price inquiry: {e}")
         
         # Check if user wants to proceed with booking
         booking_intent_keywords = ["yes", "yeah", "sure", "ok", "okay", "proceed", "let's do it", "lets do it", "please", "go ahead"]
@@ -572,14 +409,14 @@ Current date: {datetime.now().strftime('%Y-%m-%d')}
                     if payment_methods_text:
                         booking_instruction = (
                             f"\n\n[CRITICAL: User confirmed the booking. Dates: {current_dates['check_in']} to {current_dates['check_out']}. "
-                            f"Total: ${total_price:.2f}. Payment methods were already discussed earlier. "
+                            f"Total: PKR {total_price:,.2f}. Payment methods were already discussed earlier. "
                             f"Immediately show ALL payment methods below and ask for screenshot with full name and bank name:\n{payment_methods_text}\n"
                             "Mention that payment has to be verified by the host afterwards.]"
                         )
                     else:
                         booking_instruction = (
                             f"\n\n[CRITICAL: User confirmed the booking. Dates: {current_dates['check_in']} to {current_dates['check_out']}. "
-                            f"Total: ${total_price:.2f}. Payment was already discussed but host payment methods are missing. "
+                            f"Total: PKR {total_price:,.2f}. Payment was already discussed but host payment methods are missing. "
                             "Tell the guest that the host will share specific payment details shortly and still ask for payment screenshot "
                             "with their full name and bank name once details are provided.]"
                         )
@@ -587,14 +424,14 @@ Current date: {datetime.now().strftime('%Y-%m-%d')}
                     if payment_methods_text:
                         booking_instruction = (
                             f"\n\n[CRITICAL: User wants to proceed with booking. Dates: {current_dates['check_in']} to {current_dates['check_out']}. "
-                            f"Total: ${total_price:.2f}. FIRST ask 'Do we continue to payment?' and wait for confirmation. "
+                            f"Total: PKR {total_price:,.2f}. FIRST ask 'Do we continue to payment?' and wait for confirmation. "
                             f"After they say yes, explain payment methods with ALL bank details:\n{payment_methods_text}\n"
                             "Then ask for payment screenshot along with full name and bank name they're sending from.]"
                         )
                     else:
                         booking_instruction = (
                             f"\n\n[CRITICAL: User wants to proceed with booking. Dates: {current_dates['check_in']} to {current_dates['check_out']}. "
-                            f"Total: ${total_price:.2f}. Host payment methods are not configured. "
+                            f"Total: PKR {total_price:,.2f}. Host payment methods are not configured. "
                             "Ask 'Do we continue to payment?' and once they say yes, explain that the host will provide payment details manually. "
                             "Still ask them to prepare a payment screenshot along with their full name and bank name.]"
                         )

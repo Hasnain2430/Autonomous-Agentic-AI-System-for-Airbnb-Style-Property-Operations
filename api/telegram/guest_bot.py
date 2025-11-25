@@ -27,6 +27,12 @@ from api.utils.agent_router import determine_agent, update_agent_context
 # Global state for /clear confirmation flow
 CLEAR_CONFIRMATION_STATE: Dict[str, int] = {}
 
+# Global state for /book_property flow
+BOOK_PROPERTY_STATE: Dict[str, Dict[str, Any]] = {}
+
+# Global state for fixed booking questions flow
+BOOKING_QUESTIONS_STATE: Dict[str, Dict[str, Any]] = {}
+
 
 def _reset_clear_state(user_id: str) -> None:
     """Reset the clear confirmation state for a user."""
@@ -88,9 +94,14 @@ async def handle_guest_message(
     user_id = parsed["user_id"]
     text = parsed["text"]
     
-    # Get property for logging (use first property if available)
-    property_obj_for_log = db.query(Property).first()
-    property_id_for_log = property_obj_for_log.id if property_obj_for_log else None
+    # Get property for logging (try to find from context, otherwise None)
+    property_id_for_log = None
+    all_properties = db.query(Property).all()
+    for prop in all_properties:
+        context = get_conversation_context(db, user_id, prop.id)
+        if context.get("selected_property_id"):
+            property_id_for_log = context.get("selected_property_id")
+            break
     
     # Log the guest message
     log_event(
@@ -168,8 +179,7 @@ async def handle_guest_message(
                         "active_agent": None,
                         "booking_intent": False,
                         "dates": None,
-                        "negotiated_price": None,
-                        "negotiated_dates": None,
+                        # Note: negotiated_price removed - prices are now fixed
                     }
                 )
                 
@@ -188,6 +198,370 @@ async def handle_guest_message(
                     message="No pending /clear request. Send /clear first if you want to reset the chat."
                 )
                 return {"status": "command_processed", "command": "clear_confirm_noop"}
+    
+    # Handle /book_property command
+    if parsed["is_command"] and parsed["command"] == "book_property":
+        bot_token = get_bot_token("guest")
+        if bot_token:
+            # Get all available properties
+            properties = db.query(Property).all()
+            
+            if not properties:
+                await send_message(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    message="❌ No properties are currently available. Please contact the host."
+                )
+                return {"status": "command_processed", "command": "book_property"}
+            
+            # Start property selection flow
+            BOOK_PROPERTY_STATE[user_id] = {"step": "select_property"}
+            
+            # List available properties
+            properties_list = "📋 **Available Properties:**\n\n"
+            for i, prop in enumerate(properties, 1):
+                properties_list += f"{i}. 🏠 **{prop.name}**\n"
+                properties_list += f"   📍 {prop.location}\n"
+                properties_list += f"   💰 PKR {prop.base_price:,.2f} per night\n\n"
+            
+            properties_list += "Please send me the **property name** you want to book (e.g., 'Lakeside Loft'):"
+            
+            await send_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message=properties_list
+            )
+            return {"status": "command_processed", "command": "book_property"}
+    
+    # Handle property selection in /book_property flow
+    if user_id in BOOK_PROPERTY_STATE:
+        state = BOOK_PROPERTY_STATE[user_id]
+        step = state.get("step")
+        
+        if step == "select_property":
+            # Search for property by name (case-insensitive, partial match)
+            property_name = text.strip()
+            property_obj = db.query(Property).filter(
+                Property.name.ilike(f"%{property_name}%")
+            ).first()
+            
+            if not property_obj:
+                # Try exact match first
+                property_obj = db.query(Property).filter(
+                    Property.name.ilike(property_name)
+                ).first()
+            
+            if not property_obj:
+                # List available properties again
+                properties = db.query(Property).all()
+                properties_list = "❌ Property not found. Available properties:\n\n"
+                for prop in properties:
+                    properties_list += f"• {prop.name}\n"
+                properties_list += "\nPlease send the exact property name:"
+                
+                await send_message(
+                    bot_token=get_bot_token("guest"),
+                    chat_id=chat_id,
+                    message=properties_list
+                )
+                return {"status": "property_selection"}
+            
+            # Property found - save to context and clear state
+            selected_property_id = property_obj.id
+            BOOK_PROPERTY_STATE.pop(user_id, None)
+            
+            # Save property selection to context
+            from api.utils.conversation_context import save_conversation_context
+            save_conversation_context(
+                db,
+                user_id,
+                selected_property_id,
+                {
+                    "active_agent": "booking",
+                    "booking_intent": True,
+                    "selected_property_id": selected_property_id
+                }
+            )
+            
+            # Start fixed booking questions flow
+            BOOKING_QUESTIONS_STATE[user_id] = {
+                "step": "booking_checkin",
+                "property_id": selected_property_id,
+                "data": {}
+            }
+            
+            await send_message(
+                bot_token=get_bot_token("guest"),
+                chat_id=chat_id,
+                message=f"✅ Selected: **{property_obj.name}**\n\n"
+                        f"📍 Location: {property_obj.location}\n"
+                        f"💰 Price: PKR {property_obj.base_price:,.2f} per night\n"
+                        f"👥 Max Guests: {property_obj.max_guests}\n\n"
+                        f"📋 Let's collect your booking details:\n\n"
+                        f"**1. Check-in Date:**\n"
+                        f"Please provide your check-in date (e.g., 'November 25, 2025' or '25/11/2025'):"
+            )
+            return {"status": "property_selected", "property_id": selected_property_id}
+    
+    # Handle fixed booking questions flow
+    if user_id in BOOKING_QUESTIONS_STATE:
+        state = BOOKING_QUESTIONS_STATE[user_id]
+        step = state.get("step")
+        data = state.get("data", {})
+        property_id = state.get("property_id")
+        
+        if step == "booking_checkin":
+            # Parse check-in date
+            from api.utils.conversation import extract_dates_from_history
+            from datetime import datetime
+            dates = extract_dates_from_history([{"role": "user", "content": text}])
+            
+            if dates and dates.get("check_in"):
+                data["check_in"] = dates["check_in"]
+                state["step"] = "booking_checkout"
+                state["data"] = data
+                await send_message(
+                    bot_token=get_bot_token("guest"),
+                    chat_id=chat_id,
+                    message=f"✅ Check-in date saved: {dates['check_in']}\n\n"
+                            f"**2. Check-out Date:**\n"
+                            f"Please provide your check-out date (e.g., 'November 30, 2025' or '30/11/2025'):"
+                )
+                return {"status": "booking_question"}
+            else:
+                # Try to parse single date
+                try:
+                    # Try common date formats
+                    for fmt in ['%Y-%m-%d', '%m-%d-%Y', '%d-%m-%Y', '%B %d, %Y', '%b %d, %Y', '%d %B %Y', '%d %b %Y', '%d/%m/%Y', '%m/%d/%Y']:
+                        try:
+                            parsed = datetime.strptime(text.strip(), fmt)
+                            data["check_in"] = parsed.strftime('%Y-%m-%d')
+                            state["step"] = "booking_checkout"
+                            state["data"] = data
+                            await send_message(
+                                bot_token=get_bot_token("guest"),
+                                chat_id=chat_id,
+                                message=f"✅ Check-in date saved: {parsed.strftime('%B %d, %Y')}\n\n"
+                                        f"**2. Check-out Date:**\n"
+                                        f"Please provide your check-out date (e.g., 'November 30, 2025' or '30/11/2025'):"
+                            )
+                            return {"status": "booking_question"}
+                        except:
+                            continue
+                except:
+                    pass
+                
+                await send_message(
+                    bot_token=get_bot_token("guest"),
+                    chat_id=chat_id,
+                    message="❌ I couldn't understand the date format. Please provide your check-in date in one of these formats:\n"
+                            "• November 25, 2025\n"
+                            "• 25/11/2025\n"
+                            "• 2025-11-25"
+                )
+                return {"status": "booking_question"}
+        
+        elif step == "booking_checkout":
+            # Parse check-out date
+            from api.utils.conversation import extract_dates_from_history
+            from datetime import datetime
+            dates = extract_dates_from_history([{"role": "user", "content": text}])
+            
+            if dates and dates.get("check_out"):
+                data["check_out"] = dates["check_out"]
+            else:
+                # Try to parse single date
+                try:
+                    for fmt in ['%Y-%m-%d', '%m-%d-%Y', '%d-%m-%Y', '%B %d, %Y', '%b %d, %Y', '%d %B %Y', '%d %b %Y', '%d/%m/%Y', '%m/%d/%Y']:
+                        try:
+                            parsed = datetime.strptime(text.strip(), fmt)
+                            data["check_out"] = parsed.strftime('%Y-%m-%d')
+                            break
+                        except:
+                            continue
+                except:
+                    pass
+            
+            if not data.get("check_out"):
+                await send_message(
+                    bot_token=get_bot_token("guest"),
+                    chat_id=chat_id,
+                    message="❌ I couldn't understand the date format. Please provide your check-out date in one of these formats:\n"
+                            "• November 30, 2025\n"
+                            "• 30/11/2025\n"
+                            "• 2025-11-30"
+                )
+                return {"status": "booking_question"}
+            
+            # Validate dates
+            check_in = datetime.strptime(data["check_in"], '%Y-%m-%d')
+            check_out = datetime.strptime(data["check_out"], '%Y-%m-%d')
+            if check_out <= check_in:
+                await send_message(
+                    bot_token=get_bot_token("guest"),
+                    chat_id=chat_id,
+                    message="❌ Check-out date must be after check-in date. Please provide a valid check-out date:"
+                )
+                return {"status": "booking_question"}
+            
+            state["step"] = "booking_guests"
+            state["data"] = data
+            
+            # Get property for max guests
+            property_obj = db.query(Property).filter(Property.id == property_id).first()
+            max_guests = property_obj.max_guests if property_obj else 10
+            
+            await send_message(
+                bot_token=get_bot_token("guest"),
+                chat_id=chat_id,
+                message=f"✅ Check-out date saved: {check_out.strftime('%B %d, %Y')}\n\n"
+                        f"**3. Number of Guests:**\n"
+                        f"How many guests will be staying? (Maximum: {max_guests})"
+            )
+            return {"status": "booking_question"}
+        
+        elif step == "booking_guests":
+            # Parse number of guests
+            import re
+            numbers = re.findall(r'\d+', text)
+            if numbers:
+                num_guests = int(numbers[0])
+                property_obj = db.query(Property).filter(Property.id == property_id).first()
+                max_guests = property_obj.max_guests if property_obj else 10
+                
+                if num_guests < 1:
+                    await send_message(
+                        bot_token=get_bot_token("guest"),
+                        chat_id=chat_id,
+                        message="❌ Number of guests must be at least 1. Please provide a valid number:"
+                    )
+                    return {"status": "booking_question"}
+                
+                if num_guests > max_guests:
+                    await send_message(
+                        bot_token=get_bot_token("guest"),
+                        chat_id=chat_id,
+                        message=f"❌ Maximum {max_guests} guests allowed. Please provide a number between 1 and {max_guests}:"
+                    )
+                    return {"status": "booking_question"}
+                
+                data["number_of_guests"] = num_guests
+                state["step"] = "payment_name"
+                state["data"] = data
+                
+                # Calculate price
+                check_in = datetime.strptime(data["check_in"], '%Y-%m-%d')
+                check_out = datetime.strptime(data["check_out"], '%Y-%m-%d')
+                nights = (check_out - check_in).days
+                property_obj = db.query(Property).filter(Property.id == property_id).first()
+                total_price = property_obj.base_price * nights if property_obj else 0
+                data["total_price"] = total_price
+                data["nights"] = nights
+                
+                await send_message(
+                    bot_token=get_bot_token("guest"),
+                    chat_id=chat_id,
+                    message=f"✅ Number of guests saved: {num_guests}\n\n"
+                            f"📋 **Booking Summary:**\n"
+                            f"• Check-in: {check_in.strftime('%B %d, %Y')}\n"
+                            f"• Check-out: {check_out.strftime('%B %d, %Y')}\n"
+                            f"• Nights: {nights}\n"
+                            f"• Guests: {num_guests}\n"
+                            f"• Total: PKR {total_price:,.2f}\n\n"
+                            f"💰 **Payment Details:**\n\n"
+                            f"**4. Your Full Name:**\n"
+                            f"Please provide your full name as it appears on your ID:"
+                )
+                return {"status": "booking_question"}
+            else:
+                await send_message(
+                    bot_token=get_bot_token("guest"),
+                    chat_id=chat_id,
+                    message="❌ Please provide a number for the number of guests (e.g., '2' or '2 guests'):"
+                )
+                return {"status": "booking_question"}
+        
+        elif step == "payment_name":
+            # Store customer name
+            if len(text.strip()) < 2:
+                await send_message(
+                    bot_token=get_bot_token("guest"),
+                    chat_id=chat_id,
+                    message="❌ Please provide your full name (at least 2 characters):"
+                )
+                return {"status": "booking_question"}
+            
+            data["customer_name"] = text.strip()
+            state["step"] = "payment_bank"
+            state["data"] = data
+            
+            # Get host payment details to show to guest
+            property_obj = db.query(Property).filter(Property.id == property_id).first()
+            host = property_obj.host if property_obj else None
+            payment_methods_text = ""
+            if host:
+                payment_methods_list = host.get_payment_methods()
+                if payment_methods_list:
+                    payment_methods_text = "\n\n💳 **Host Payment Details (Transfer money here):**\n"
+                    for pm in payment_methods_list:
+                        bank_name = pm.get('bank_name', 'N/A')
+                        account_number = pm.get('account_number', 'N/A')
+                        account_name = pm.get('account_name', '')
+                        payment_methods_text += f"• **{bank_name}**: {account_number}"
+                        if account_name:
+                            payment_methods_text += f" ({account_name})"
+                        payment_methods_text += "\n"
+                    
+                    # Calculate total amount
+                    check_in = datetime.strptime(data["check_in"], "%Y-%m-%d")
+                    check_out = datetime.strptime(data["check_out"], "%Y-%m-%d")
+                    nights = (check_out - check_in).days
+                    total_price = property_obj.base_price * nights
+                    payment_methods_text += f"\n💰 **Amount to Pay: PKR {total_price:,.2f}**"
+            
+            await send_message(
+                bot_token=get_bot_token("guest"),
+                chat_id=chat_id,
+                message=f"✅ Name saved: {text.strip()}{payment_methods_text}\n\n"
+                        f"**5. Your Bank Name:**\n"
+                        f"Which bank or payment service are you sending payment from?\n"
+                        f"(e.g., HBL Bank, JazzCash, EasyPaisa, SadaPay, Meezan Bank, etc.)"
+            )
+            return {"status": "booking_question"}
+        
+        elif step == "payment_bank":
+            # Store bank name
+            if len(text.strip()) < 2:
+                await send_message(
+                    bot_token=get_bot_token("guest"),
+                    chat_id=chat_id,
+                    message="❌ Please provide the bank name (e.g., 'JazzCash' or 'HBL Bank'):"
+                )
+                return {"status": "booking_question"}
+            
+            data["customer_bank_name"] = text.strip()
+            state["step"] = "payment_screenshot"
+            state["data"] = data
+            BOOKING_QUESTIONS_STATE[user_id] = state
+            
+            # Get payment methods
+            property_obj = db.query(Property).filter(Property.id == property_id).first()
+            host = property_obj.host if property_obj else None
+            payment_methods_text = ""
+            if host and host.payment_methods:
+                payment_methods_text = "\n\n**Payment Methods:**\n"
+                for pm in host.payment_methods:
+                    payment_methods_text += f"• {pm.get('bank_name', 'N/A')}: {pm.get('account_number', 'N/A')}\n"
+            
+            await send_message(
+                bot_token=get_bot_token("guest"),
+                chat_id=chat_id,
+                message=f"✅ Bank name saved: {text.strip()}\n\n"
+                        f"**6. Payment Screenshot:**\n"
+                        f"Please upload a screenshot of your payment transfer.{payment_methods_text}\n\n"
+                        f"After uploading, your booking will be sent to the host for verification."
+            )
+            return {"status": "awaiting_screenshot"}
     
     # Handle /start command
     if parsed["is_command"] and parsed["command"] == "start":
@@ -213,10 +587,12 @@ I'm your autonomous property booking assistant. I can help you with:
 • Making bookings
 • Answering questions about properties
 
-📋 **Menu:**
-/inquiry - Get information about available properties and start a booking inquiry
+📋 **Commands:**
+/inquiry - View available properties and ask questions
+/book_property - Select a property to book directly
+/qna - Ask questions about properties, bookings, or general inquiries
 
-Just use /inquiry to begin, or ask me anything about our properties!"""
+Just use /inquiry or /book_property to begin, or ask me anything about our properties!"""
             
             await send_message(
                 bot_token=bot_token,
@@ -258,7 +634,7 @@ You can ask me questions about properties, availability, or pricing anytime!"""
                 for prop in properties:
                     inquiry_message += f"🏠 **{prop.name}**\n"
                     inquiry_message += f"📍 {prop.location}\n"
-                    inquiry_message += f"💰 ${prop.base_price:.2f} per night\n"
+                    inquiry_message += f"💰 PKR {prop.base_price:,.2f} per night\n"
                     inquiry_message += f"👥 Max {prop.max_guests} guests\n"
                     inquiry_message += f"🕐 Check-in: {prop.check_in_time} | Check-out: {prop.check_out_time}\n\n"
                 
@@ -276,6 +652,68 @@ You can ask me questions about properties, availability, or pricing anytime!"""
             )
             
             return {"status": "command_processed", "command": "inquiry"}
+    
+    # Handle /qna command
+    if parsed["is_command"] and parsed["command"] == "qna":
+        bot_token = get_bot_token("guest")
+        if bot_token:
+            # Get all properties for context
+            properties = db.query(Property).all()
+            
+            # Set to inquiry agent for QnA
+            from api.utils.conversation_context import save_conversation_context
+            save_conversation_context(
+                db,
+                user_id,
+                None,
+                {
+                    "active_agent": "inquiry",
+                    "booking_intent": False,
+                }
+            )
+            
+            if not properties:
+                await send_message(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    message="📋 **Q&A**\n\n"
+                            "I'm here to answer your questions! However, no properties are currently available.\n\n"
+                            "You can ask me general questions, and I'll do my best to help."
+                )
+            else:
+                # Check if guest has any confirmed bookings
+                confirmed_bookings = db.query(Booking).filter(
+                    Booking.guest_telegram_id == user_id,
+                    Booking.booking_status == 'confirmed'
+                ).all()
+                
+                if confirmed_bookings:
+                    booking_info = "📋 **Q&A - You have active bookings!**\n\n"
+                    for booking in confirmed_bookings:
+                        booking_info += f"• {booking.property.name} - Check-in: {booking.check_in_date.strftime('%B %d, %Y')}\n"
+                    booking_info += "\nYou can ask me questions about:\n"
+                    booking_info += "• Your bookings\n"
+                    booking_info += "• Property details\n"
+                    booking_info += "• Check-in/check-out procedures\n"
+                    booking_info += "• General inquiries\n\n"
+                    booking_info += "Just ask your question!"
+                else:
+                    booking_info = "📋 **Q&A**\n\n"
+                    booking_info += "I'm here to answer your questions about:\n"
+                    booking_info += "• Available properties\n"
+                    booking_info += "• Booking procedures\n"
+                    booking_info += "• Pricing and availability\n"
+                    booking_info += "• Property details and amenities\n"
+                    booking_info += "• General inquiries\n\n"
+                    booking_info += "Just ask your question!"
+                
+                await send_message(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    message=booking_info
+                )
+            
+            return {"status": "command_processed", "command": "qna"}
     
     # If we are awaiting customer payment details, intercept the message before other handling
     pending_event = None
@@ -327,21 +765,18 @@ You can ask me questions about properties, availability, or pricing anytime!"""
             )
             return {"status": "error", "message": "No dates in context"}
         
-        # Get price from context or calculate from property
-        negotiated_price = pending_metadata.get("negotiated_price") or context.get("negotiated_price")
-        if not negotiated_price:
-            # Calculate from property base price
-            from datetime import datetime
-            check_in = datetime.strptime(dates["check_in"], "%Y-%m-%d")
-            check_out = datetime.strptime(dates["check_out"], "%Y-%m-%d")
-            nights = (check_out - check_in).days
-            negotiated_price = property_obj.base_price * nights
+        # Calculate price: base price × number of nights (fixed pricing)
+        from datetime import datetime
+        check_in = datetime.strptime(dates["check_in"], "%Y-%m-%d")
+        check_out = datetime.strptime(dates["check_out"], "%Y-%m-%d")
+        nights = (check_out - check_in).days
+        final_price = property_obj.base_price * nights
         
         booking_details = {
             "check_in": dates["check_in"],
             "check_out": dates["check_out"],
-            "final_price": negotiated_price,
-            "requested_price": negotiated_price,  # Also set requested_price
+            "final_price": final_price,
+            "requested_price": final_price,
             "number_of_guests": 1,
             "customer_name": customer_name,
             "customer_bank_name": customer_bank_name,
@@ -375,10 +810,6 @@ You can ask me questions about properties, availability, or pricing anytime!"""
     
     # Check if this is a photo (payment screenshot)
     if parsed["photo"]:
-        # Check if this is a payment screenshot (should have customer details in previous message or caption)
-        # For now, we'll check the previous message for customer details
-        # In a more sophisticated implementation, we could use a state machine
-        
         # Get the largest photo (last in the array)
         photos = parsed["photo"]
         if not photos:
@@ -391,15 +822,102 @@ You can ask me questions about properties, availability, or pricing anytime!"""
         if not file_id:
             return {"status": "error", "message": "No file ID found"}
         
-        # Get property
-        property_obj = db.query(Property).first()
+        # Check if we're in the fixed booking questions flow
+        if user_id in BOOKING_QUESTIONS_STATE:
+            state = BOOKING_QUESTIONS_STATE[user_id]
+            if state.get("step") == "payment_screenshot":
+                data = state.get("data", {})
+                property_id = state.get("property_id")
+                
+                # Get property
+                property_obj = db.query(Property).filter(Property.id == property_id).first()
+                if not property_obj:
+                    await send_message(
+                        bot_token=get_bot_token("guest"),
+                        chat_id=chat_id,
+                        message="❌ Error: Property not found. Please start over with /book_property"
+                    )
+                    BOOKING_QUESTIONS_STATE.pop(user_id, None)
+                    return {"status": "error", "message": "Property not found"}
+                
+                # Prepare booking details from fixed questions
+                booking_details = {
+                    "check_in": data.get("check_in"),
+                    "check_out": data.get("check_out"),
+                    "final_price": data.get("total_price"),
+                    "number_of_guests": data.get("number_of_guests", 1),
+                    "customer_name": data.get("customer_name"),
+                    "customer_bank_name": data.get("customer_bank_name")
+                }
+                
+                # Create booking with screenshot
+                booking = await handle_payment_screenshot(
+                    db=db,
+                    guest_telegram_id=user_id,
+                    file_id=file_id,
+                    property_id=property_id,
+                    booking_details=booking_details
+                )
+                
+                if booking:
+                    # Clear booking questions state
+                    BOOKING_QUESTIONS_STATE.pop(user_id, None)
+                    
+                    # Send to host for verification
+                    await send_payment_to_host(db=db, booking=booking)
+                    
+                    # Confirm to guest
+                    await send_message(
+                        bot_token=get_bot_token("guest"),
+                        chat_id=chat_id,
+                        message="✅ Thank you! Your payment screenshot has been received and sent to the host for verification.\n\n"
+                                "You will receive a confirmation message once the host verifies your payment."
+                    )
+                    
+                    return {"status": "payment_received", "booking_id": booking.id}
+                else:
+                    await send_message(
+                        bot_token=get_bot_token("guest"),
+                        chat_id=chat_id,
+                        message="❌ I'm sorry, there was an error processing your payment screenshot. Please try again or contact support."
+                    )
+                    return {"status": "error", "message": "Failed to process payment screenshot"}
+            else:
+                await send_message(
+                    bot_token=get_bot_token("guest"),
+                    chat_id=chat_id,
+                    message="Please complete the booking questions first. We're waiting for your answers."
+                )
+                return {"status": "error", "message": "Not ready for screenshot"}
+        
+        # Fallback: Old flow (for backward compatibility)
+        # Check if we have a selected property in context
+        all_properties = db.query(Property).all()
+        selected_property_id = None
+        
+        # Check context from any property to find selected_property_id
+        for prop in all_properties:
+            context = get_conversation_context(db, user_id, prop.id)
+            if context.get("selected_property_id"):
+                selected_property_id = context.get("selected_property_id")
+                break
+        
+        if not selected_property_id:
+            await send_message(
+                bot_token=get_bot_token("guest"),
+                chat_id=chat_id,
+                message="📋 Please select a property first using /book_property before uploading a payment screenshot."
+            )
+            return {"status": "error", "message": "No property selected"}
+        
+        property_obj = db.query(Property).filter(Property.id == selected_property_id).first()
         if not property_obj:
             await send_message(
                 bot_token=get_bot_token("guest"),
                 chat_id=chat_id,
-                message="I'm sorry, no properties are configured yet. Please contact the host."
+                message="❌ Error: Selected property not found. Please use /book_property to select a property again."
             )
-            return {"status": "error", "message": "No properties configured"}
+            return {"status": "error", "message": "Property not found"}
         
         # Get booking details from conversation context
         context = get_conversation_context(db, user_id, property_obj.id)
@@ -414,7 +932,13 @@ You can ask me questions about properties, availability, or pricing anytime!"""
             return {"status": "error", "message": "No dates in context"}
         
         dates = context["dates"]
-        negotiated_price = context.get("negotiated_price")
+        
+        # Calculate price: base price × number of nights (fixed pricing)
+        from datetime import datetime
+        check_in = datetime.strptime(dates["check_in"], "%Y-%m-%d")
+        check_out = datetime.strptime(dates["check_out"], "%Y-%m-%d")
+        nights = (check_out - check_in).days
+        final_price = property_obj.base_price * nights
         
         details = _extract_customer_details(parsed["text"])
         customer_name = details.get("customer_name")
@@ -428,7 +952,7 @@ You can ask me questions about properties, availability, or pricing anytime!"""
                 property_id=property_obj.id,
                 file_id=file_id,
                 dates=dates,
-                negotiated_price=negotiated_price
+                negotiated_price=final_price  # Keep parameter name for backward compatibility
             )
             await send_message(
                 bot_token=get_bot_token("guest"),
@@ -446,7 +970,7 @@ You can ask me questions about properties, availability, or pricing anytime!"""
         booking_details = {
             "check_in": dates["check_in"],
             "check_out": dates["check_out"],
-            "final_price": negotiated_price,
+            "final_price": final_price,
             "number_of_guests": 1,  # Default, can be enhanced later
             "customer_name": customer_name,
             "customer_bank_name": customer_bank_name
@@ -494,16 +1018,45 @@ You can ask me questions about properties, availability, or pricing anytime!"""
     # Route message to Inquiry & Booking Agent
     bot_token = get_bot_token("guest")
     if bot_token and text:
-        # Get property - for now, use the first property (can be enhanced later)
-        property_obj = db.query(Property).first()
+        # Get property - check context first for selected property, then use first property as fallback
+        property_obj = None
+        # Try to get context with any property_id first to check for selected_property_id
+        all_properties = db.query(Property).all()
+        selected_property_id = None
         
-        if not property_obj:
+        # Check context from any property to find selected_property_id
+        for prop in all_properties:
+            context = get_conversation_context(db, user_id, prop.id)
+            if context.get("selected_property_id"):
+                selected_property_id = context.get("selected_property_id")
+                break
+        
+        if selected_property_id:
+            property_obj = db.query(Property).filter(Property.id == selected_property_id).first()
+        
+        # Check if we're in QnA mode (after /qna command) - allow questions without property
+        context_check = get_conversation_context(db, user_id, None)
+        is_qna_mode = context_check.get("active_agent") == "inquiry" and not context_check.get("booking_intent")
+        
+        # For QnA mode, try to find property from bookings if not selected
+        if is_qna_mode and not property_obj:
+            confirmed_booking = db.query(Booking).filter(
+                Booking.guest_telegram_id == user_id,
+                Booking.booking_status == 'confirmed'
+            ).order_by(Booking.check_in_date.desc()).first()
+            
+            if confirmed_booking:
+                property_obj = confirmed_booking.property
+        
+        # Require property selection for non-QnA mode
+        if not property_obj and not is_qna_mode:
             await send_message(
                 bot_token=bot_token,
                 chat_id=chat_id,
-                message="I'm sorry, no properties are configured yet. Please contact the host."
+                message="📋 Please select a property first using /book_property or /inquiry to view available properties.\n\n"
+                        "I need to know which property you're asking about before I can help you."
             )
-            return {"status": "error", "message": "No properties configured"}
+            return {"status": "error", "message": "No property selected"}
         
         # Send "thinking" message immediately to avoid timeout
         # We'll delete it after sending the actual response
@@ -525,52 +1078,75 @@ You can ask me questions about properties, availability, or pricing anytime!"""
         
         # Determine which agent to use
         try:
-            # Get conversation history for context
-            conversation_history = get_conversation_history(
-                db=db,
-                guest_telegram_id=user_id,
-                property_id=property_obj.id,
-                limit=10  # Last 10 messages
-            )
             
-            # Use router to determine which agent to use
-            agent_type = determine_agent(
-                db=db,
-                guest_telegram_id=user_id,
-                property_id=property_obj.id,
-                message=text,
-                conversation_history=conversation_history
-            )
-            
-            # Initialize appropriate agent
-            if agent_type == "booking":
-                agent = BookingAgent()
-                # Process message with booking agent
-                result = agent.handle_booking(
+            # Use hybrid QnA handler if in QnA mode
+            if is_qna_mode:
+                from api.utils.qna_handler import handle_qna_with_fallback
+                agent = InquiryAgent()
+                result = handle_qna_with_fallback(
                     db=db,
-                    message=text,
-                    property_id=property_obj.id,
+                    question=text,
+                    property_id=property_obj.id if property_obj else None,
                     guest_telegram_id=user_id,
-                    conversation_history=conversation_history
-                )
-                # Update context with active agent
-                update_agent_context(
-                    db=db,
-                    guest_telegram_id=user_id,
-                    property_id=property_obj.id,
-                    agent_name="booking",
-                    booking_intent=True
+                    llm_agent=agent
                 )
             else:
-                agent = InquiryAgent()
-                # Process message with inquiry agent
-                result = agent.handle_inquiry(
+                # Regular flow - need property
+                if not property_obj:
+                    await send_message(
+                        bot_token=bot_token,
+                        chat_id=chat_id,
+                        message="📋 Please select a property first using /book_property or /inquiry to view available properties.\n\n"
+                                "I need to know which property you're asking about before I can help you."
+                    )
+                    return {"status": "error", "message": "No property selected"}
+                
+                # Get conversation history for context
+                conversation_history = get_conversation_history(
                     db=db,
-                    message=text,
-                    property_id=property_obj.id,
                     guest_telegram_id=user_id,
+                    property_id=property_obj.id,
+                    limit=10  # Last 10 messages
+                )
+                
+                # Use router to determine which agent to use
+                agent_type = determine_agent(
+                    db=db,
+                    guest_telegram_id=user_id,
+                    property_id=property_obj.id,
+                    message=text,
                     conversation_history=conversation_history
                 )
+                
+                # Initialize appropriate agent
+                if agent_type == "booking":
+                    agent = BookingAgent()
+                    # Process message with booking agent
+                    result = agent.handle_booking(
+                        db=db,
+                        message=text,
+                        property_id=property_obj.id,
+                        guest_telegram_id=user_id,
+                        conversation_history=conversation_history
+                    )
+                    # Update context with active agent
+                    update_agent_context(
+                        db=db,
+                        guest_telegram_id=user_id,
+                        property_id=property_obj.id,
+                        agent_name="booking",
+                        booking_intent=True
+                    )
+                else:
+                    # Regular inquiry agent
+                    agent = InquiryAgent()
+                    result = agent.handle_inquiry(
+                        db=db,
+                        message=text,
+                        property_id=property_obj.id,
+                        guest_telegram_id=user_id,
+                        conversation_history=conversation_history
+                    )
                 # Check if inquiry agent wants to transition to booking
                 if result.get("action") == "transition_to_booking":
                     # Update context to mark booking intent
