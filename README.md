@@ -478,6 +478,76 @@ curl -X POST "http://localhost:8000/api/agents/host-summary/weekly?week_start_da
 - `GET /api/bookings` - List bookings
 - `GET /api/bookings/{id}` - Get booking details
 
+### Metrics Endpoints
+- `GET /api/metrics` - Get all detailed metrics
+- `GET /api/metrics/summary` - Get quick metrics summary
+- `GET /api/metrics/evaluation` - Get evaluation scores as percentages
+
+---
+
+## 📈 Evaluation Metrics
+
+The system provides comprehensive metrics via the `/api/metrics` endpoint.
+
+### How to Access Metrics
+
+```bash
+# Get evaluation scores (percentages + grade)
+curl "http://localhost:8000/api/metrics/evaluation"
+
+# Get all detailed metrics
+curl "http://localhost:8000/api/metrics"
+
+# Get metrics for specific period
+curl "http://localhost:8000/api/metrics?period=month"
+
+# Get quick summary
+curl "http://localhost:8000/api/metrics/summary"
+```
+
+### Evaluation Scores (GET /api/metrics/evaluation)
+
+Returns key performance indicators as percentages:
+
+| Metric | Description | Target |
+|--------|-------------|--------|
+| **Overall System Score** | Weighted average of all metrics | 80%+ |
+| **Booking Success Rate** | % of bookings confirmed | 75%+ |
+| **Payment Accuracy** | % of payments approved | 90%+ |
+| **Agent Response Rate** | % of messages with responses | 95%+ |
+| **FAQ Hit Rate** | % answered from database | 30%+ |
+| **User Retention Rate** | % of returning guests | 20%+ |
+| **Cancellation Rate** | % of cancelled bookings | <10% |
+
+
+### Available Metrics
+
+**Agent Performance:**
+- FAQ Hit Rate - % of queries answered from database
+- LLM Fallback Rate - % of queries requiring AI processing
+- Average Response Time - Seconds between message and response
+- Total Inquiries and Responses
+
+**Booking Metrics:**
+- Booking Conversion Rate - % of bookings confirmed
+- Payment Success Rate - % of payments approved
+- Cancellation Rate - % of bookings cancelled
+- Total Revenue (PKR)
+- Average Booking Value
+- Flow Completion Rate - % of started bookings that complete
+
+**User Engagement:**
+- Active Users - Unique users in period
+- Return Rate - % of guests with multiple bookings
+- Average Messages per User
+- Total Guests and Hosts
+
+**System Health:**
+- Error Rate - % of events with errors
+- Response Rate - % of messages that got responses
+- Event Breakdown by Type
+- Database Statistics
+
 ---
 
 ## 💾 Database
@@ -500,6 +570,33 @@ This creates:
 ```bash
 python scripts/seed_dummy_data.py --reset
 ```
+
+### Run Bot Tests
+
+Test all Telegram bot functionalities:
+
+```bash
+# Run all tests
+python scripts/test_bots.py
+
+# Test only guest bot
+python scripts/test_bots.py --guest-only
+
+# Test only host bot
+python scripts/test_bots.py --host-only
+
+# Use custom server URL
+python scripts/test_bots.py --url http://localhost:8001
+```
+
+**Tests include:**
+- Guest Bot: /start, /inquiry, /book_property, /qna, /clear
+- Guest Booking Flow: property selection, dates, guests, payment details
+- Guest QnA: WiFi, parking, check-in questions
+- Host Bot: /start, /help, /setup, /add_property, /cancel
+- Host Setup Flow: name, email, phone, bank details
+- Host Property Flow: all property details + amenities
+- Metrics Endpoints: /api/metrics, /api/metrics/evaluation
 
 ---
 

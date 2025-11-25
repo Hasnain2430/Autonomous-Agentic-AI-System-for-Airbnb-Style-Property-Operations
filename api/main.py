@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 import os
 
 from database.db import init_db
-from api.routes import health, agents, telegram, bookings, properties, logs, n8n
+from api.routes import health, agents, telegram, bookings, properties, logs, n8n, metrics
 
 # Load environment variables
 load_dotenv()
@@ -47,6 +47,7 @@ app.include_router(bookings.router, prefix="/api", tags=["bookings"])
 app.include_router(properties.router, prefix="/api", tags=["properties"])
 app.include_router(logs.router, prefix="/api", tags=["logs"])
 app.include_router(n8n.router, prefix="/api", tags=["n8n"])
+app.include_router(metrics.router, prefix="/api", tags=["metrics"])
 
 
 @app.get("/")
