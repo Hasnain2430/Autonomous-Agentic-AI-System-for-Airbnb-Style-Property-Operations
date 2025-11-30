@@ -27,7 +27,7 @@ ENV/
 .venv
 
 # Environment Variables
-# .env  # Commented out - including in private repo for easy setup
+.env
 .env.local
 .env.*.local
 
